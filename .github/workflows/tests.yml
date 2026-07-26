@@ -1,0 +1,115 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: host unit tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: install clang
+        if: matrix.cc == 'clang'
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: run
+        run: make test HOST_CC=${{ matrix.cc }}
+
+  build:
+    name: build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            cc: gcc
+            pkgs: ""
+          - arch: x86
+            cc: gcc
+            pkgs: gcc-multilib
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc
+            pkgs: gcc-aarch64-linux-gnu
+          - arch: armv7
+            cc: arm-linux-gnueabihf-gcc
+            pkgs: gcc-arm-linux-gnueabihf
+          - arch: armv6
+            cc: arm-linux-gnueabihf-gcc
+            pkgs: gcc-arm-linux-gnueabihf
+          - arch: riscv64
+            cc: riscv64-linux-gnu-gcc
+            pkgs: gcc-riscv64-linux-gnu
+          # noble ships no unversioned loongarch cross compiler
+          - arch: loongarch64
+            cc: loongarch64-linux-gnu-gcc-14
+            pkgs: gcc-14-loongarch64-linux-gnu
+          - arch: mips
+            cc: mips-linux-gnu-gcc
+            pkgs: gcc-mips-linux-gnu
+          - arch: mipsel
+            cc: mipsel-linux-gnu-gcc
+            pkgs: gcc-mipsel-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: install toolchain
+        if: matrix.pkgs != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkgs }}
+      # Pins every hand-transcribed syscall number and ABI flag against this
+      # target's kernel headers. The freestanding build itself includes none.
+      - name: abi check
+        run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+      - name: build
+        run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+      - name: size
+        run: size build/${{ matrix.arch }}/init
+
+  variants:
+    name: build with features off
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run
+        run: |
+          set -e
+          for v in OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
+                   FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
+                   FEATURE_CAPABILITY_DROP=0; do
+            k=${v%%=*}
+            echo "=== $v"
+            make BUILD=build/var EXTRA_CFLAGS="-U$k -D$v" all
+            rm -rf build/var
+          done
+          make BUILD=build/var PIE=0 all
+
+  boot-namespace:
+    name: namespace boot test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor;
+      # the harness skips cleanly if this does not take.
+      - name: allow user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: run
+        run: make test-ns ARCH=x86_64
+
+  boot-qemu:
+    name: qemu boot test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install qemu and a kernel
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 linux-image-virtual
+          sudo chmod +r /boot/vmlinuz-* || true
+      - name: run
+        run: make test-qemu ARCH=x86_64
