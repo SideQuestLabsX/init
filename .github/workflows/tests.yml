@@ -1,5 +1,10 @@
 name: tests
 
+# Pinned on purpose: ubuntu-24.04 rather than ubuntu-latest, gcc-14 and clang-18
+# rather than the image defaults, actions/checkout by commit. Apt packages carry
+# no version: the archive drops superseded binaries, so an exact pin breaks the
+# day a security update lands. The image label is what fixes those versions.
+
 on:
   push:
     branches: [main]
@@ -9,58 +14,60 @@ on:
 jobs:
   unit:
     name: host unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        cc: [gcc, clang]
+        include:
+          - cc: gcc-14
+            pkg: gcc-14
+          # the sanitizer runtime is only a Recommends of the clang packaging
+          - cc: clang-18
+            pkg: clang-18 libclang-rt-18-dev
     steps:
-      - uses: actions/checkout@v4
-      - name: install clang
-        if: matrix.cc == 'clang'
-        run: sudo apt-get update && sudo apt-get install -y clang
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install compiler
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkg }}
       - name: run
         run: make test HOST_CC=${{ matrix.cc }}
 
   build:
     name: build ${{ matrix.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            cc: gcc
-            pkgs: ""
+            cc: gcc-14
+            pkgs: gcc-14
           - arch: x86
-            cc: gcc
-            pkgs: gcc-multilib
+            cc: gcc-14
+            pkgs: gcc-14-multilib
           - arch: aarch64
-            cc: aarch64-linux-gnu-gcc
-            pkgs: gcc-aarch64-linux-gnu
+            cc: aarch64-linux-gnu-gcc-14
+            pkgs: gcc-14-aarch64-linux-gnu
           - arch: armv7
-            cc: arm-linux-gnueabihf-gcc
-            pkgs: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc-14
+            pkgs: gcc-14-arm-linux-gnueabihf
           - arch: armv6
-            cc: arm-linux-gnueabihf-gcc
-            pkgs: gcc-arm-linux-gnueabihf
+            cc: arm-linux-gnueabihf-gcc-14
+            pkgs: gcc-14-arm-linux-gnueabihf
           - arch: riscv64
-            cc: riscv64-linux-gnu-gcc
-            pkgs: gcc-riscv64-linux-gnu
-          # noble ships no unversioned loongarch cross compiler
+            cc: riscv64-linux-gnu-gcc-14
+            pkgs: gcc-14-riscv64-linux-gnu
           - arch: loongarch64
             cc: loongarch64-linux-gnu-gcc-14
             pkgs: gcc-14-loongarch64-linux-gnu
           - arch: mips
-            cc: mips-linux-gnu-gcc
-            pkgs: gcc-mips-linux-gnu
+            cc: mips-linux-gnu-gcc-14
+            pkgs: gcc-14-mips-linux-gnu
           - arch: mipsel
-            cc: mipsel-linux-gnu-gcc
-            pkgs: gcc-mipsel-linux-gnu
+            cc: mipsel-linux-gnu-gcc-14
+            pkgs: gcc-14-mipsel-linux-gnu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install toolchain
-        if: matrix.pkgs != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkgs }}
       # Pins every hand-transcribed syscall number and ABI flag against this
       # target's kernel headers. The freestanding build itself includes none.
@@ -73,43 +80,92 @@ jobs:
 
   variants:
     name: build with features off
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-14
+      # variant list lives in the Makefile, shared with check-all
       - name: run
-        run: |
-          set -e
-          for v in OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
-                   FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
-                   FEATURE_CAPABILITY_DROP=0; do
-            k=${v%%=*}
-            echo "=== $v"
-            make BUILD=build/var EXTRA_CFLAGS="-U$k -D$v" all
-            rm -rf build/var
-          done
-          make BUILD=build/var PIE=0 all
+        run: make test-variants CC=gcc-14
 
   boot-namespace:
-    name: namespace boot test
-    runs-on: ubuntu-latest
+    name: namespace boot test (${{ matrix.tier }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: [auto, caps]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install compiler and uid mapping helpers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 uidmap
+          user=$(id -un)
+          if ! grep -q "^${user}:" /etc/subuid; then
+            echo "${user}:100000:65536" | sudo tee -a /etc/subuid
+          fi
+          if ! grep -q "^${user}:" /etc/subgid; then
+            echo "${user}:100000:65536" | sudo tee -a /etc/subgid
+          fi
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor;
       # the harness skips cleanly if this does not take.
       - name: allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
-        run: make test-ns ARCH=x86_64
+        run: make test-ns ARCH=x86_64 CC=gcc-14 INIT_NS_TIER=${{ matrix.tier }}
 
   boot-qemu:
-    name: qemu boot test
-    runs-on: ubuntu-latest
+    name: qemu boot test (x86_64)
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install qemu and a kernel
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 linux-image-virtual
+          sudo apt-get install -y gcc-14 qemu-system-x86 linux-image-virtual
           sudo chmod +r /boot/vmlinuz-* || true
       - name: run
-        run: make test-qemu ARCH=x86_64
+        run: make test-qemu ARCH=x86_64 CC=gcc-14
+
+  boot-qemu-aarch64:
+    name: qemu boot test (aarch64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: add the arm64 package archive
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i '/^Architectures:/d; /^Components:/a Architectures: amd64' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          . /etc/os-release
+          sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<EOF
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
+          Components: main
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+      - name: install qemu, the compiler and an arm64 kernel
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-arm gcc-14-aarch64-linux-gnu
+          kernel_package=$(apt-cache depends linux-image-generic:arm64 | \
+            sed -n 's/.*Depends: \(linux-image-[^ ]*\)/\1/p' | head -n 1)
+          test -n "$kernel_package"
+          mkdir -p "$RUNNER_TEMP/arm64-kernel"
+          cd "$RUNNER_TEMP/arm64-kernel"
+          apt-get download "${kernel_package}:arm64"
+          package=$(find . -maxdepth 1 -name "${kernel_package}_*_arm64.deb" -print -quit)
+          test -n "$package"
+          dpkg-deb -x "$package" root
+          kernel=$(find root/boot -name 'vmlinuz-*' -print -quit)
+          test -n "$kernel"
+          echo "KERNEL=$PWD/$kernel" >> "$GITHUB_ENV"
+      # TCG emulation, so the x86_64 job's 90s is not enough
+      - name: run
+        run: make test-qemu ARCH=aarch64 CC=aarch64-linux-gnu-gcc-14
+        env:
+          TIMEOUT: 300

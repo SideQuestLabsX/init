@@ -1621,6 +1621,7 @@ const TaskRule *TaskRuleFind(const char *name)
 
 u64  BackoffNext(u64 currentNs);
 bool BackoffStable(u64 startedNs, u64 exitedNs);
+u32  RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs);
 
 u64 BackoffNext(u64 currentNs)
 {
@@ -1638,6 +1639,11 @@ bool BackoffStable(u64 startedNs, u64 exitedNs)
     if(exitedNs <= startedNs)
         return false;
     return (exitedNs - startedNs) >= CFG_STABLE_NS;
+}
+
+u32 RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs)
+{
+    return BackoffStable(startedNs, exitedNs) ? 0 : currentFails + 1;
 }
 
 /* ======================================================================
@@ -3044,15 +3050,9 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
         return;
     }
 
-    if(BackoffStable(t->startedNs, nowNs))
-    {
-        t->consecFails = 0;
+    t->consecFails = RestartFailuresNext(t->consecFails, t->startedNs, nowNs);
+    if(t->consecFails == 0)
         t->backoffNs = 0;
-    }
-    else
-    {
-        t->consecFails++;
-    }
 
     if(t->consecFails >= t->maxRestarts)
     {

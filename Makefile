@@ -94,7 +94,7 @@ LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecst
 # One translation unit; _start is the only thing that has to be assembly.
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check test test-ns test-qemu abi-check fixtures allarch help
+.PHONY: all clean check check-all test test-ns test-qemu test-variants abi-check fixtures allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -160,8 +160,9 @@ $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
 	$(CC) $(FIXTURE_CFLAGS) $< tests/fixtures/fstart.S -o $@ \
 	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
 
-QEMU_BUILD := build/$(ARCH)-qemu
-NS_BUILD   := build/$(ARCH)-ns
+QEMU_BUILD ?= build/$(ARCH)-qemu
+NS_BUILD   ?= build/$(ARCH)-ns
+NS_ROOTFS  ?= tools/stage-rootfs.sh
 
 test-qemu:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(QEMU_BUILD) BOOT_TEST=1 \
@@ -172,9 +173,55 @@ test-qemu:
 test-ns:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 \
 	        all fixtures
-	ARCH=$(ARCH) BUILD=$(NS_BUILD) sh tools/run-namespace.sh
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 check: test abi-check all test-ns test-qemu
+
+# Shared with CI
+FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
+                    FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
+                    FEATURE_CAPABILITY_DROP=0
+
+CHECK_CC_x86_64     ?= gcc
+CHECK_CC_x86        ?= gcc
+CHECK_CC_aarch64    ?= aarch64-linux-gnu-gcc
+CHECK_CC_armv7      ?= arm-linux-gnueabihf-gcc
+CHECK_CC_armv6      ?= arm-linux-gnueabihf-gcc
+CHECK_CC_riscv64    ?= riscv64-linux-gnu-gcc
+CHECK_CC_loongarch64 ?= loongarch64-linux-gnu-gcc-14
+CHECK_CC_mips       ?= mips-linux-gnu-gcc
+CHECK_CC_mipsel     ?= mipsel-linux-gnu-gcc
+
+check-all: check
+	@set -e; \
+	for spec in \
+	  x86_64:$(CHECK_CC_x86_64) x86:$(CHECK_CC_x86) \
+	  aarch64:$(CHECK_CC_aarch64) armv7:$(CHECK_CC_armv7) armv6:$(CHECK_CC_armv6) \
+	  riscv64:$(CHECK_CC_riscv64) loongarch64:$(CHECK_CC_loongarch64) \
+	  mips:$(CHECK_CC_mips) mipsel:$(CHECK_CC_mipsel); do \
+		arch=$${spec%%:*}; cc=$${spec#*:}; \
+		if ! command -v "$$cc" >/dev/null 2>&1; then \
+			echo "SKIP: $$arch compiler $$cc not installed"; \
+			continue; \
+		fi; \
+		echo "=== check $$arch with $$cc"; \
+		$(MAKE) --no-print-directory ARCH=$$arch BUILD=build/check-$$arch \
+		        CC=$$cc abi-check all; \
+	done
+	@$(MAKE) --no-print-directory test-variants
+
+test-variants:
+	@set -e; \
+	for v in $(FEATURE_VARIANTS); do \
+		k=$${v%%=*}; \
+		echo "=== variant $$v"; \
+		$(MAKE) --no-print-directory BUILD=build/var \
+		        EXTRA_CFLAGS="-U$$k -D$$v" all; \
+		rm -rf build/var; \
+	done
+	@$(MAKE) --no-print-directory BUILD=build/var PIE=0 all
+	@rm -rf build/var
 
 allarch:
 	@for a in $(ARCHES); do \
@@ -189,7 +236,9 @@ help:
 	@echo "make [ARCH=...]                     build init"
 	@echo "make test                           host unit tests"
 	@echo "make abi-check ARCH=...             verify syscall numbers"
-	@echo "make test-ns                        boot test in a namespace"
+	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
 	@echo "make test-qemu ARCH=x86_64|aarch64  boot test under qemu"
+	@echo "make test-variants                  build every feature variant"
 	@echo "make check                          everything runnable here"
+	@echo "make check-all                      every installed toolchain and variant"
 	@echo "make allarch                        build every target"

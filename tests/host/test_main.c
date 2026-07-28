@@ -402,6 +402,14 @@ static void TestBackoff(void)
     CHECK(BackoffStable(0, CFG_STABLE_NS));
     CHECK(!BackoffStable(0, CFG_STABLE_NS - 1));
     CHECK(!BackoffStable(100, 50));
+
+    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS - 1) == 5);
+    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS) == 0);
+
+    /* shipped probe timings put a restart past CFG_STABLE_NS, so consecFails resets */
+    u64 shippedProbeFailureNs = CFG_PROBE_GRACE_NS +
+        (u64)(CFG_PROBE_FAIL_LIMIT - 1) * CFG_PROBE_INTERVAL_NS;
+    CHECK(shippedProbeFailureNs > CFG_STABLE_NS);
 }
 
 /* ---------------------------------------------------------------- procstat */

@@ -82,29 +82,7 @@ reject()
 }
 
 echo "checking markers:"
-expect "init $ARCH starting, pid 1"
-expect "12 tasks in /tasks"
-expect "ok: started pid"
-expect "FIXTURE ok started"
-expect "FIXTURE probe ran"                 # exec probe fired
-expect "FIXTURE oneshot ran"
-expect "oneshot: done"                  # a clean boot task is not respawned
-# every accepted spelling parses: a regression here logs "not a schedule"
-reject "not a schedule"
-expect "flap: exit 3 sig 0, respawn in" # exponential backoff engaged
-expect "flap: FAILED after"
-expect "hangcheck: probe timed out, killing pid"   # unreapable check
-expect "hangcheck: restarting on probe failure"    # timeouts counted
-expect "hangcheck: FAILED after"                   # and it terminates             # gave up rather than fork-bombing
-expect "FIXTURE tick fired"                # interval task on CLOCK_BOOTTIME
-expect "FIXTURE logfile begin"
-expect "ok-stderr-line"                    # capture -> ring -> writer -> disk
-expect "flap-dying"
-expect "FIXTURE selftest done"
-expect "shutdown requested by signal 10"
-expect "syncing"
-reject "PANIC"
-reject "Kernel panic"
+. tools/boot-markers.sh
 
 if [ $QEMU_RC -ne 0 ]; then
     echo "  BAD   qemu exited $QEMU_RC (expected 0 from the reboot syscall)"
