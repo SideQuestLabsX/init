@@ -2685,6 +2685,7 @@ void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
     if(bDropping && capMask != 0)
         SysPrctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
 #else
+    UNUSED(capMask);
     if(uid != 0 || gid != 0)
     {
         SysSetGroups(0, NULL);
@@ -2781,6 +2782,7 @@ static void TaskAdvanceDeadline(Task *t, u64 nowNs)
 /* An unsynced board boots at the epoch, so calendar tasks are scheduled against
  * a clock reading 1970 and land early. Re-dating them on the first sync is what
  * makes that a wrong start time rather than a task that never runs. */
+#if !OFFLINE_MODE
 static void TaskRedateCal(InitState *st, u64 nowNs)
 {
     for(usize i = 0; i < st->taskCount; i++)
@@ -2803,6 +2805,7 @@ static void TaskRedateCal(InitState *st, u64 nowNs)
         }
     }
 }
+#endif
 
 void TaskScanAll(InitState *st)
 {
@@ -2865,9 +2868,11 @@ void TaskScanAll(InitState *st)
                 continue;
             }
 
+#if FEATURE_EXEC_PROBES
             usize n = StrCopy(t->checkPath, sizeof(t->checkPath), t->path);
             StrCopy(t->checkPath + n, sizeof(t->checkPath) - n, ".check");
             t->bHasCheck = SysAccess(t->checkPath, X_OK) == 0;
+#endif
 
             t->schedule = schedule;
             t->intervalNs = intervalNs;

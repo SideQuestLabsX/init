@@ -94,7 +94,7 @@ LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecst
 # One translation unit; _start is the only thing that has to be assembly.
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-ns test-qemu test-variants abi-check fixtures allarch help
+.PHONY: all clean check check-all test test-ns test-qemu test-variant test-variants abi-check fixtures allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -150,7 +150,8 @@ FIXTURE_SRC := $(wildcard tests/fixtures/*.c)
 FIXTURE_BIN := $(patsubst tests/fixtures/%.c,$(BUILD)/fixtures/%,$(FIXTURE_SRC))
 FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -static -no-pie \
                   -fno-stack-protector -fno-builtin -fno-common \
-                  -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH)
+                  -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH) \
+                  $(FIXTURE_EXTRA_CFLAGS)
 
 fixtures: $(FIXTURE_BIN)
 
@@ -178,7 +179,7 @@ test-ns:
 
 check: test abi-check all test-ns test-qemu
 
-# Shared with CI
+# CI runs the same variants as a parallel matrix
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
                     FEATURE_CAPABILITY_DROP=0
@@ -211,14 +212,28 @@ check-all: check
 	done
 	@$(MAKE) --no-print-directory test-variants
 
+test-variant:
+	$(if $(filter $(FEATURE_VARIANT),$(FEATURE_VARIANTS)),,$(error Unknown feature variant '$(FEATURE_VARIANT)'))
+	@set -eu; \
+	v='$(FEATURE_VARIANT)'; \
+	k=$${v%%=*}; \
+	extra="-U$$k -D$$v"; \
+	fixture_extra=; \
+	if [ "$$v" = FEATURE_EXEC_PROBES=0 ]; then \
+		fixture_extra="-DFIXTURE_SETTLE_NS=25000000000ull"; \
+	fi; \
+	build="build/variant-$$k"; \
+	rm -rf "$$build"; \
+	$(MAKE) --no-print-directory BUILD="$$build" BOOT_TEST=1 \
+	        EXTRA_CFLAGS="$$extra" FIXTURE_EXTRA_CFLAGS="$$fixture_extra" \
+	        all fixtures; \
+	FEATURE_VARIANT="$$v" sh tools/run-feature-variant.sh "$$build"
+
 test-variants:
 	@set -e; \
 	for v in $(FEATURE_VARIANTS); do \
-		k=$${v%%=*}; \
 		echo "=== variant $$v"; \
-		$(MAKE) --no-print-directory BUILD=build/var \
-		        EXTRA_CFLAGS="-U$$k -D$$v" all; \
-		rm -rf build/var; \
+		$(MAKE) --no-print-directory FEATURE_VARIANT="$$v" test-variant; \
 	done
 	@$(MAKE) --no-print-directory BUILD=build/var PIE=0 all
 	@rm -rf build/var
@@ -238,7 +253,8 @@ help:
 	@echo "make abi-check ARCH=...             verify syscall numbers"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
 	@echo "make test-qemu ARCH=x86_64|aarch64  boot test under qemu"
-	@echo "make test-variants                  build every feature variant"
+	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"
+	@echo "make test-variants                  test every disabled feature"
 	@echo "make check                          everything runnable here"
 	@echo "make check-all                      every installed toolchain and variant"
 	@echo "make allarch                        build every target"

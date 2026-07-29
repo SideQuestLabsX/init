@@ -75,19 +75,33 @@ jobs:
         run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
       - name: build
         run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+      - name: build without PIE
+        if: matrix.arch == 'x86_64'
+        run: make ARCH=x86_64 CC=gcc-14 BUILD=build/x86_64-nonpie PIE=0
       - name: size
         run: size build/${{ matrix.arch }}/init
 
   variants:
-    name: build with features off
+    name: behavior with ${{ matrix.variant }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - OFFLINE_MODE=1
+          - FEATURE_WATCHDOG=0
+          - FEATURE_EXEC_PROBES=0
+          - FEATURE_LOG_DISK=0
+          - FEATURE_LOG_CAPTURE=0
+          - FEATURE_CAPABILITY_DROP=0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install compiler
-        run: sudo apt-get update && sudo apt-get install -y gcc-14
-      # variant list lives in the Makefile, shared with check-all
+      - name: install compiler and tracing tools
+        run: sudo apt-get update && sudo apt-get install -y gcc-14 strace time
+      - name: allow user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
-        run: make test-variants CC=gcc-14
+        run: make test-variant CC=gcc-14 FEATURE_VARIANT='${{ matrix.variant }}'
 
   boot-namespace:
     name: namespace boot test (${{ matrix.tier }})

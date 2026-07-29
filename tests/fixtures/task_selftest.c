@@ -6,7 +6,9 @@
 
 #include "fixture.h"
 
-#define SETTLE_NS (6ull * NS_PER_SEC)
+#ifndef FIXTURE_SETTLE_NS
+  #define FIXTURE_SETTLE_NS (6ull * NS_PER_SEC)
+#endif
 
 static void DumpLog(void)
 {
@@ -41,7 +43,7 @@ static void DumpLog(void)
 void FixtureMain(void)
 {
     FixtureSay("FIXTURE selftest waiting");
-    FixtureSleep(SETTLE_NS);
+    FixtureSleep(FIXTURE_SETTLE_NS);
 
     DumpLog();
     FixtureSay("FIXTURE selftest done");

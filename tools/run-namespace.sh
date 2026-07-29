@@ -19,10 +19,18 @@ LOG="$BUILD/ns-console.log"
 
 requested_tier="${INIT_NS_TIER:-}"
 
+record_result()
+{
+    if [ -n "${INIT_NS_RESULT:-}" ]; then
+        printf '%s\n' "$1" > "$INIT_NS_RESULT"
+    fi
+}
+
 case "$requested_tier" in
     ""|auto|caps)
         ;;
     skip)
+        record_result skip
         echo "SKIP: namespace tier forced to skip"
         exit 0
         ;;
@@ -38,6 +46,7 @@ unavailable()
         echo "ERROR: namespace tier '$requested_tier' is unavailable: $1"
         exit 1
     fi
+    record_result skip
     echo "SKIP: $1"
     exit 0
 }
@@ -137,7 +146,7 @@ reject()
 }
 
 echo "checking markers:"
-. tools/boot-markers.sh
+. "${BOOT_MARKERS:-tools/boot-markers.sh}"
 
 if [ $RC -eq 124 ]; then
     echo "  BAD   timed out after ${TIMEOUT}s without shutting down"
@@ -145,7 +154,9 @@ if [ $RC -eq 124 ]; then
 fi
 
 if [ $fail -ne 0 ]; then
+    record_result fail
     echo "NAMESPACE BOOT TEST FAILED"
     exit 1
 fi
+record_result pass
 echo "NAMESPACE BOOT TEST PASSED"

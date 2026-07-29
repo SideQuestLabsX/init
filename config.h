@@ -8,12 +8,24 @@
 
 /* ---- what to build ---------------------------------------------------- */
 
-#define FEATURE_CAPABILITY_DROP 1   /* drop privileges before execve */
-#define FEATURE_EXEC_PROBES     1   /* <task>.check liveness probes */
-#define FEATURE_WATCHDOG        1   /* probe-gated hardware watchdog */
-#define FEATURE_LOG_CAPTURE     1   /* pipe capture into the shared ring */
-#define FEATURE_LOG_DISK        1   /* forked writer, batched disk flush */
-#define OFFLINE_MODE            0   /* 1 strips all networking and SNTP */
+#ifndef FEATURE_CAPABILITY_DROP
+  #define FEATURE_CAPABILITY_DROP 1   /* drop privileges before execve */
+#endif
+#ifndef FEATURE_EXEC_PROBES
+  #define FEATURE_EXEC_PROBES 1       /* <task>.check liveness probes */
+#endif
+#ifndef FEATURE_WATCHDOG
+  #define FEATURE_WATCHDOG 1          /* probe-gated hardware watchdog */
+#endif
+#ifndef FEATURE_LOG_CAPTURE
+  #define FEATURE_LOG_CAPTURE 1       /* pipe capture into the shared ring */
+#endif
+#ifndef FEATURE_LOG_DISK
+  #define FEATURE_LOG_DISK 1          /* forked writer, batched disk flush */
+#endif
+#ifndef OFFLINE_MODE
+  #define OFFLINE_MODE 0              /* 1 strips all networking and SNTP */
+#endif
 
 /* ---- where things live ------------------------------------------------ */
 
