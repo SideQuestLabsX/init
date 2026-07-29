@@ -2547,6 +2547,9 @@ void LogdSupervise(InitState *st, u64 nowNs);
 bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs);
 NORETURN void LogWriterMain(InitState *st);
 
+NORETURN void ChildFail(const char *step, isize result);
+void ChildCheck(const char *step, isize result);
+void ChildDup(const char *step, i32 oldFd, i32 newFd);
 void ChildPrepare(void);
 void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask);
 i32  SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t);
@@ -2628,13 +2631,42 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
  * tasks
  * ====================================================================== */
 
+NORETURN void ChildFail(const char *step, isize result)
+{
+    char line[128];
+    usize n = Fmt(line, sizeof(line), "init: child %s failed, errno %d\n",
+                  step, (i32)-result);
+    SysWrite(2, line, n);
+    SysExit(126);
+}
+
+void ChildCheck(const char *step, isize result)
+{
+    if(result < 0)
+        ChildFail(step, result);
+}
+
+void ChildDup(const char *step, i32 oldFd, i32 newFd)
+{
+    if(oldFd != newFd)
+        ChildCheck(step, SysDup3(oldFd, newFd, 0));
+}
+
 void ChildPrepare(void)
 {
-    /* no longer PID 1, so default signal actions apply again and the inherited
-     * block mask has to go */
+    KSigAction sa;
+    memset(&sa, 0, sizeof(sa));
+    ChildCheck("sigaction SIGCHLD", SysSigAction(SIGCHLD, &sa, NULL));
+    ChildCheck("sigaction SIGTERM", SysSigAction(SIGTERM, &sa, NULL));
+    ChildCheck("sigaction SIGUSR1", SysSigAction(SIGUSR1, &sa, NULL));
+    ChildCheck("sigaction SIGUSR2", SysSigAction(SIGUSR2, &sa, NULL));
+    ChildCheck("sigaction SIGINT", SysSigAction(SIGINT, &sa, NULL));
+    ChildCheck("sigaction SIGHUP", SysSigAction(SIGHUP, &sa, NULL));
+
+    ChildCheck("setsid", SysSetSid());
+
     KSigSet none = { 0 };
-    SysSigProcMask(SIG_SETMASK, &none, NULL);
-    SysSetSid();
+    ChildCheck("sigprocmask", SysSigProcMask(SIG_SETMASK, &none, NULL));
 }
 
 void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
@@ -2642,28 +2674,31 @@ void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
 #if FEATURE_CAPABILITY_DROP
     /* Order is load-bearing: no_new_privs, bounding set, ids, capset.
      * The ambient set is what carries the retained caps across execve. */
-    SysPrctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    ChildCheck("PR_SET_NO_NEW_PRIVS",
+               SysPrctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
 
     for(u32 cap = 0; cap <= CAP_LAST_CAP; cap++)
     {
         if((capMask & (1ull << cap)) == 0)
-            SysPrctl(PR_CAPBSET_DROP, cap, 0, 0, 0);
+            ChildCheck("PR_CAPBSET_DROP",
+                       SysPrctl(PR_CAPBSET_DROP, cap, 0, 0, 0));
     }
 
     bool bDropping = uid != 0;
     if(bDropping && capMask != 0)
-        SysPrctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
+        ChildCheck("PR_SET_KEEPCAPS",
+                   SysPrctl(PR_SET_KEEPCAPS, 1, 0, 0, 0));
 
     /* Dropping the uid without the gid leaves the child in group 0 holding
      * root's supplementary groups, which looks dropped and is not. A rule that
      * names a uid and no gid gets the uid as its gid. */
     if(bDropping || gid != 0)
     {
-        SysSetGroups(0, NULL);
-        SysSetGid(gid != 0 ? gid : uid);
+        ChildCheck("setgroups", SysSetGroups(0, NULL));
+        ChildCheck("setgid", SysSetGid(gid != 0 ? gid : uid));
     }
     if(bDropping)
-        SysSetUid(uid);
+        ChildCheck("setuid", SysSetUid(uid));
 
     KCapHeader hdr = { LINUX_CAPABILITY_VERSION_3, 0 };
     KCapData data[2];
@@ -2674,25 +2709,27 @@ void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
     data[1].effective = (u32)(capMask >> 32);
     data[1].permitted = data[1].effective;
     data[1].inheritable = data[1].effective;
-    SysCapSet(&hdr, data);
+    ChildCheck("capset", SysCapSet(&hdr, data));
 
     for(u32 cap = 0; cap <= CAP_LAST_CAP; cap++)
     {
         if(capMask & (1ull << cap))
-            SysPrctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0);
+            ChildCheck("PR_CAP_AMBIENT_RAISE",
+                       SysPrctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0));
     }
 
     if(bDropping && capMask != 0)
-        SysPrctl(PR_SET_KEEPCAPS, 0, 0, 0, 0);
+        ChildCheck("PR_SET_KEEPCAPS",
+                   SysPrctl(PR_SET_KEEPCAPS, 0, 0, 0, 0));
 #else
     UNUSED(capMask);
     if(uid != 0 || gid != 0)
     {
-        SysSetGroups(0, NULL);
-        SysSetGid(gid != 0 ? gid : uid);
+        ChildCheck("setgroups", SysSetGroups(0, NULL));
+        ChildCheck("setgid", SysSetGid(gid != 0 ? gid : uid));
     }
     if(uid != 0)
-        SysSetUid(uid);
+        ChildCheck("setuid", SysSetUid(uid));
 #endif
 }
 
@@ -2707,18 +2744,18 @@ i32 SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t)
     isize devNull = SysOpen("/dev/null", O_RDWR, 0);
     if(devNull >= 0)
     {
-        SysDup3((i32)devNull, 0, 0);
+        ChildDup("dup3 stdin", (i32)devNull, 0);
         if(outFd < 0)
-            SysDup3((i32)devNull, 1, 0);
+            ChildDup("dup3 stdout", (i32)devNull, 1);
         if(errFd < 0)
-            SysDup3((i32)devNull, 2, 0);
+            ChildDup("dup3 stderr", (i32)devNull, 2);
         if(devNull > 2)
             SysClose((i32)devNull);
     }
     if(outFd >= 0)
-        SysDup3(outFd, 1, 0);
+        ChildDup("dup3 stdout", outFd, 1);
     if(errFd >= 0)
-        SysDup3(errFd, 2, 0);
+        ChildDup("dup3 stderr", errFd, 2);
 
     if(t != NULL)
         ChildApplyPrivileges(t->uid, t->gid, t->capMask);
@@ -3874,7 +3911,10 @@ bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs)
 
     st->logdBackoffNs = BackoffNext(st->logdBackoffNs);
     st->logdNextSpawnNs = nowNs + st->logdBackoffNs;
-    LogF("log writer exited (%d), respawning in %ums", status,
+    i32 exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    i32 termSig = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    LogF("log writer exited (exit %d sig %d), respawning in %ums",
+         exitCode, termSig,
          (u32)(st->logdBackoffNs / NS_PER_MS));
     return true;
 }

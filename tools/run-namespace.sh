@@ -98,12 +98,34 @@ case "$requested_tier" in
         ;;
 esac
 
+logd_fixture=1
+privilege_fixtures=1
+case "${FEATURE_VARIANT:-}" in
+    FEATURE_LOG_DISK=0)
+        logd_fixture=0
+        ;;
+    FEATURE_CAPABILITY_DROP=0)
+        privilege_fixtures=0
+        ;;
+esac
+
+INIT_NS_ACTIVE_TIER="$ns_tier" \
+INIT_LOGD_FIXTURE=$logd_fixture \
+INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-# No devtmpfs here, so stand in a regular file for /dev/console. init and the
-# fixtures both open it O_APPEND, so the merged transcript stays ordered.
+task_count=$((12 + logd_fixture + 2 * privilege_fixtures))
+EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
+if [ "$privilege_fixtures" -ne 0 ]; then
+    MARKER_NS_TIER=$ns_tier
+fi
+
+# No devtmpfs here, so regular files stand in for /dev/console and /dev/null
+# Console opens use O_APPEND, keeping the merged transcript ordered
 : > "$STAGE/dev/console"
 chmod 0666 "$STAGE/dev/console"
+: > "$STAGE/dev/null"
+chmod 0666 "$STAGE/dev/null"
 
 echo "namespace tier: $ns_tier"
 if [ "$ns_tier" = caps ]; then

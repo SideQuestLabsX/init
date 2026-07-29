@@ -1,8 +1,17 @@
 # Sourced by run-namespace.sh and run-qemu.sh, which define expect(), reject()
 # and $ARCH. EXPECT_TASKS is the staged task count.
+# run-namespace.sh selects the tier
+# feature-variant-markers.sh disables checks for compiled-out behavior
+
+MARKER_LOGD="${MARKER_LOGD:-1}"
+MARKER_NS_TIER="${MARKER_NS_TIER:-}"
+MARKER_CHILD_ERROR="${MARKER_CHILD_ERROR:-1}"
+MARKER_PROBES="${MARKER_PROBES:-1}"
+MARKER_LOGFILE="${MARKER_LOGFILE:-1}"
+MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 
 expect "init $ARCH starting, pid 1"
-expect "${EXPECT_TASKS:-12} tasks in /tasks"
+expect "${EXPECT_TASKS:-13} tasks in /tasks"
 expect "ok: started pid"
 expect "FIXTURE ok started"
 expect "FIXTURE oneshot ran"
@@ -17,18 +26,49 @@ expect "syncing"
 reject "PANIC"
 reject "Kernel panic"
 
-if [ "${MARKER_PROBES:-1}" -ne 0 ]; then
+if [ "$MARKER_LOGD" -ne 0 ]; then
+    expect "FIXTURE log writer signaled"
+    expect "log writer exited (exit -1 sig 15), respawning in"
+fi
+
+if [ -n "$MARKER_NS_TIER" ]; then
+    status_task=caps
+    if [ "$MARKER_NS_TIER" = auto ]; then
+        status_task=identity
+    fi
+
+    expect "FIXTURE $status_task status CapInh 0000000000000400"
+    expect "FIXTURE $status_task status CapPrm 0000000000000400"
+    expect "FIXTURE $status_task status CapEff 0000000000000400"
+    expect "FIXTURE $status_task status CapBnd 0000000000000400"
+    expect "FIXTURE $status_task status CapAmb 0000000000000400"
+    expect "FIXTURE $status_task status NoNewPrivs 1"
+
+    if [ "$MARKER_NS_TIER" = auto ]; then
+        expect "FIXTURE identity status Uid 65534 65534 65534 65534"
+        expect "FIXTURE identity status Gid 65534 65534 65534 65534"
+        expect "FIXTURE identity status Groups none"
+    else
+        if [ "$MARKER_CHILD_ERROR" -ne 0 ]; then
+            expect "init: child setgroups failed, errno 1"
+        fi
+        expect "impossible: exit 126 sig 0"
+        expect "impossible: FAILED after"
+    fi
+fi
+
+if [ "$MARKER_PROBES" -ne 0 ]; then
     expect "FIXTURE probe ran"
     expect "hangcheck: probe timed out, killing pid"
     expect "hangcheck: restarting on probe failure"
     expect "hangcheck: FAILED after"
 fi
 
-if [ "${MARKER_LOGFILE:-1}" -ne 0 ]; then
+if [ "$MARKER_LOGFILE" -ne 0 ]; then
     expect "FIXTURE logfile begin"
 fi
 
-if [ "${MARKER_CAPTURE:-1}" -ne 0 ]; then
+if [ "$MARKER_CAPTURE" -ne 0 ]; then
     expect "ok-stderr-line"
     expect "flap-dying"
 fi

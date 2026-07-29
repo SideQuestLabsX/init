@@ -36,6 +36,20 @@ install_bin task_selftest tasks/always/selftest
 install_bin task_oneshot  tasks/boot/oneshot
 install_bin task_tick     tasks/2s/tick
 
+if [ "${INIT_LOGD_FIXTURE:-1}" -ne 0 ]; then
+    install_bin task_signal_logd tasks/boot/signal_logd
+fi
+
+if [ -n "${INIT_NS_ACTIVE_TIER:-}" ] &&
+   [ "${INIT_NS_PRIVILEGE_FIXTURES:-1}" -ne 0 ]; then
+    install_bin task_status tasks/boot/caps
+    if [ "$INIT_NS_ACTIVE_TIER" = auto ]; then
+        install_bin task_status tasks/boot/identity
+    else
+        install_bin task_ok tasks/always/impossible
+    fi
+fi
+
 # One directory per accepted spelling. Only 2s and 500ms can fire inside the
 # test window; the rest are here so a parser regression shows up as a task that
 # stopped being counted rather than as a schedule nobody noticed breaking.

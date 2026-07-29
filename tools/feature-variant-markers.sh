@@ -5,9 +5,15 @@ case "$FEATURE_VARIANT" in
     FEATURE_LOG_DISK=0)
         MARKER_LOGFILE=0
         MARKER_CAPTURE=0
+        MARKER_LOGD=0
+        MARKER_CHILD_ERROR=0
         ;;
     FEATURE_LOG_CAPTURE=0)
         MARKER_CAPTURE=0
+        MARKER_CHILD_ERROR=0
+        ;;
+    FEATURE_CAPABILITY_DROP=0)
+        MARKER_NS_TIER=
         ;;
 esac
 

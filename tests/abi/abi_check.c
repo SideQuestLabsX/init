@@ -17,6 +17,7 @@
 #include <asm/unistd.h>
 #include <asm/errno.h>
 #include <linux/fcntl.h>
+#include <linux/capability.h>
 #include <linux/mount.h>
 #include <linux/mman.h>
 #include <linux/prctl.h>
@@ -84,6 +85,7 @@ enum
     K_PR_SET_NNP      = PR_SET_NO_NEW_PRIVS,
     K_PR_CAP_AMBIENT  = PR_CAP_AMBIENT,
     K_PR_CAP_AMB_RAISE = PR_CAP_AMBIENT_RAISE,
+    K_CAP_LAST_CAP    = CAP_LAST_CAP,
     K_CLOCK_REALTIME  = CLOCK_REALTIME,
     K_CLOCK_BOOTTIME  = CLOCK_BOOTTIME,
 };
@@ -153,6 +155,7 @@ static const unsigned long long K_WDIOC_SETTIMEOUT = (unsigned long long)WDIOC_S
 #undef PR_CAP_AMBIENT
 #undef PR_CAP_AMBIENT_RAISE
 #undef PR_CAP_AMBIENT_CLEAR_ALL
+#undef CAP_LAST_CAP
 #undef CLOCK_REALTIME
 #undef CLOCK_MONOTONIC
 #undef CLOCK_BOOTTIME
@@ -344,6 +347,7 @@ SAME(PR_CAPBSET_DROP, K_PR_CAPBSET_DROP);
 SAME(PR_SET_NO_NEW_PRIVS, K_PR_SET_NNP);
 SAME(PR_CAP_AMBIENT, K_PR_CAP_AMBIENT);
 SAME(PR_CAP_AMBIENT_RAISE, K_PR_CAP_AMB_RAISE);
+SAME(CAP_LAST_CAP, K_CAP_LAST_CAP);
 
 SAME(CLOCK_REALTIME, K_CLOCK_REALTIME);
 SAME(CLOCK_BOOTTIME, K_CLOCK_BOOTTIME);

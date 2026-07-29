@@ -23,5 +23,14 @@ static const TaskRule TASK_RULES[] =
       .probeTimeoutNs = 300ull * NS_PER_MS,
       .maxRestarts = 2 },
 
+    { .name = "caps", .capMask = CAP_BIT(10) },
+
+    { .name = "identity",
+      .uid = 65534,
+      .gid = 65534,
+      .capMask = CAP_BIT(10) },
+
+    { .name = "impossible", .uid = 65534, .maxRestarts = 2 },
+
     { .name = NULL },
 };
