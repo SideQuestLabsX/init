@@ -11,7 +11,7 @@ MARKER_LOGFILE="${MARKER_LOGFILE:-1}"
 MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 
 expect "init $ARCH starting, pid 1"
-expect "${EXPECT_TASKS:-13} tasks in /tasks"
+expect "${EXPECT_TASKS:-17} tasks in /tasks"
 expect "ok: started pid"
 expect "FIXTURE ok started"
 expect "FIXTURE oneshot ran"
@@ -62,6 +62,23 @@ if [ "$MARKER_PROBES" -ne 0 ]; then
     expect "hangcheck: probe timed out, killing pid"
     expect "hangcheck: restarting on probe failure"
     expect "hangcheck: FAILED after"
+    expect "midprobe: cancelling probe pid"
+    reject "midprobe: probe timed out"
+    reject "midprobe: probe failed"
+    expect "ignoreterm: restart grace expired, sending SIGKILL"
+    expect "probefail: FAILED after"
+    expect "FIXTURE tree replacement started"
+
+    if awk '
+        index($0, "FIXTURE tree replacement started") { bAfter = 1; next }
+        bAfter && index($0, "FIXTURE tree worker alive") { bFound = 1; exit }
+        END { exit bFound ? 0 : 1 }
+    ' "$LOG"; then
+        echo "  BAD   tree worker survived its replacement"
+        fail=1
+    else
+        echo "  ok    tree worker stopped with its process group"
+    fi
 fi
 
 if [ "$MARKER_LOGFILE" -ne 0 ]; then

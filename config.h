@@ -52,7 +52,9 @@
  * for CFG_STABLE_NS */
 #define CFG_BACKOFF_MIN_NS   (100ull * NS_PER_MS)
 #define CFG_BACKOFF_MAX_NS   (60ull * NS_PER_SEC)
-#define CFG_STABLE_NS        (60ull * NS_PER_SEC)
+#ifndef CFG_STABLE_NS
+  #define CFG_STABLE_NS      (60ull * NS_PER_SEC)
+#endif
 #define CFG_MAX_RESTARTS     10
 
 #define CFG_PROBE_INTERVAL_NS (30ull * NS_PER_SEC)
@@ -65,6 +67,9 @@
 #define CFG_WDOG_PET_NS       (10ull * NS_PER_SEC)
 
 #define CFG_SHUTDOWN_GRACE_NS (5ull * NS_PER_SEC)
+#ifndef CFG_RESTART_GRACE_NS
+  #define CFG_RESTART_GRACE_NS CFG_SHUTDOWN_GRACE_NS
+#endif
 #define CFG_LOOP_MAX_WAIT_NS  (1ull * NS_PER_SEC)
 
 /* ---- disk logging ----------------------------------------------------- */

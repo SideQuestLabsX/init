@@ -2467,6 +2467,8 @@ typedef struct
     i32  lastExit;
     i32  lastSignal;
     u64  lastExitNs;
+    u64  killDeadlineNs;
+    bool bUnhealthyKill;
 
     i32     outFd;
     i32     errFd;
@@ -2945,6 +2947,26 @@ static void TaskClosePipes(Task *t)
     }
 }
 
+static void SignalChild(i32 pid, i32 sig)
+{
+    if(pid <= 1)
+        return;
+    SysKill(-pid, sig);
+    SysKill(pid, sig);
+}
+
+static void ProbeDiscard(Task *t, bool bLog)
+{
+    if(t->probePid <= 0)
+        return;
+
+    if(bLog)
+        LogF("%s: cancelling probe pid %d", t->name, t->probePid);
+    SignalChild(t->probePid, SIGKILL);
+    t->probePid = 0;
+    t->bProbeKilled = false;
+}
+
 void TaskStart(InitState *st, Task *t, u64 nowNs)
 {
     UNUSED(st);
@@ -3048,8 +3070,14 @@ void TaskDrain(InitState *st, Task *t)
 
 static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
 {
+    bool bUnhealthyExit = t->bUnhealthyKill;
+
+    SignalChild(t->pid, SIGKILL);
     t->lastExitNs = nowNs;
     t->pid = 0;
+    t->killDeadlineNs = 0;
+    t->bUnhealthyKill = false;
+    ProbeDiscard(t, true);
 
     if(WIFEXITED(status))
     {
@@ -3092,9 +3120,16 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
         return;
     }
 
-    t->consecFails = RestartFailuresNext(t->consecFails, t->startedNs, nowNs);
-    if(t->consecFails == 0)
-        t->backoffNs = 0;
+    if(bUnhealthyExit)
+    {
+        t->consecFails++;
+    }
+    else
+    {
+        t->consecFails = RestartFailuresNext(t->consecFails, t->startedNs, nowNs);
+        if(t->consecFails == 0)
+            t->backoffNs = 0;
+    }
 
     if(t->consecFails >= t->maxRestarts)
     {
@@ -3153,6 +3188,14 @@ void TaskTick(InitState *st, u64 nowNs)
             break;
 
         case TS_RUNNING:
+            if(t->bUnhealthyKill && t->killDeadlineNs != 0 &&
+               nowNs >= t->killDeadlineNs)
+            {
+                LogF("%s: restart grace expired, sending SIGKILL", t->name);
+                SignalChild(t->pid, SIGKILL);
+                t->killDeadlineNs = 0;
+            }
+
             /* a periodic task still running when its next interval arrives is
              * logged and passed over, never queued */
             if((t->schedule == SCHED_EVERY || t->schedule == SCHED_CAL) &&
@@ -3179,10 +3222,9 @@ void TaskSignalAll(InitState *st, i32 sig)
 {
     for(usize i = 0; i < st->taskCount; i++)
     {
-        if(st->task[i].pid > 0)
-            SysKill(st->task[i].pid, sig);
-        if(st->task[i].probePid > 0)
-            SysKill(st->task[i].probePid, SIGKILL);
+        Task *t = &st->task[i];
+        SignalChild(t->pid, sig);
+        ProbeDiscard(t, false);
     }
 }
 
@@ -3206,14 +3248,18 @@ u64 TaskNextDeadline(const InitState *st, u64 nowNs)
 
         if((t->state == TS_BACKOFF || t->state == TS_IDLE) && t->nextRunNs < best)
             best = t->nextRunNs;
-        if(t->state == TS_RUNNING && t->bHasCheck && t->nextProbeNs < best)
+        if(t->state == TS_RUNNING && t->bHasCheck && !t->bUnhealthyKill &&
+           t->nextProbeNs < best)
             best = t->nextProbeNs;
-        if(t->probePid > 0)
+        if(t->probePid > 0 && !t->bUnhealthyKill)
         {
             u64 deadline = t->probeStartNs + t->probeTimeoutNs;
             if(deadline < best)
                 best = deadline;
         }
+        if(t->state == TS_RUNNING && t->killDeadlineNs != 0 &&
+           t->killDeadlineNs < best)
+            best = t->killDeadlineNs;
     }
     return best;
 }
@@ -3316,14 +3362,16 @@ static void ProbeFailed(Task *t, u64 nowNs)
     if(t->probeFails >= CFG_PROBE_FAIL_LIMIT && t->pid > 0)
     {
         LogF("%s: restarting on probe failure", t->name);
-        SysKill(t->pid, SIGTERM);
+        t->bUnhealthyKill = true;
+        t->killDeadlineNs = nowNs + CFG_RESTART_GRACE_NS;
+        SignalChild(t->pid, SIGTERM);
         t->probeFails = 0;
     }
 }
 
 void ProbeTick(InitState *st, Task *t, u64 nowNs)
 {
-    if(!t->bHasCheck || st->bShutdown)
+    if(!t->bHasCheck || st->bShutdown || t->bUnhealthyKill)
         return;
 
     if(t->probePid > 0)

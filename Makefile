@@ -79,6 +79,8 @@ CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS)
 # their window. Everything else matches a normal build.
 ifeq ($(BOOT_TEST),1)
   CFLAGS += -DCFG_LOGD_FLUSH_NS=500000000ull \
+            -DCFG_STABLE_NS=500000000ull \
+            -DCFG_RESTART_GRACE_NS=500000000ull \
             -DINIT_TASK_RULES_H='"tests/fixtures/test_rules.h"'
   CONFIG_DEPS := config.h tests/fixtures/test_rules.h
 else

@@ -32,5 +32,29 @@ static const TaskRule TASK_RULES[] =
 
     { .name = "impossible", .uid = 65534, .maxRestarts = 2 },
 
+    { .name = "midprobe",
+      .graceNs = 50ull * NS_PER_MS,
+      .probeIntervalNs = 2ull * NS_PER_SEC,
+      .probeTimeoutNs = 2ull * NS_PER_SEC,
+      .maxRestarts = 2 },
+
+    { .name = "ignoreterm",
+      .graceNs = 50ull * NS_PER_MS,
+      .probeIntervalNs = 50ull * NS_PER_MS,
+      .probeTimeoutNs = NS_PER_SEC,
+      .maxRestarts = 1 },
+
+    { .name = "probefail",
+      .graceNs = 700ull * NS_PER_MS,
+      .probeIntervalNs = 50ull * NS_PER_MS,
+      .probeTimeoutNs = NS_PER_SEC,
+      .maxRestarts = 2 },
+
+    { .name = "tree",
+      .graceNs = 50ull * NS_PER_MS,
+      .probeIntervalNs = 50ull * NS_PER_MS,
+      .probeTimeoutNs = NS_PER_SEC,
+      .maxRestarts = 2 },
+
     { .name = NULL },
 };

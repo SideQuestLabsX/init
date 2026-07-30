@@ -114,7 +114,7 @@ INIT_LOGD_FIXTURE=$logd_fixture \
 INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((12 + logd_fixture + 2 * privilege_fixtures))
+task_count=$((16 + logd_fixture + 2 * privilege_fixtures))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier

@@ -27,14 +27,22 @@ install_bin()
     chmod 0755 "$STAGE/$2"
 }
 
-install_bin task_ok       tasks/always/ok
-install_bin probe_ok      tasks/always/ok.check
-install_bin task_flap     tasks/always/flap
-install_bin task_ok       tasks/always/hangcheck
-install_bin probe_hang    tasks/always/hangcheck.check
-install_bin task_selftest tasks/always/selftest
-install_bin task_oneshot  tasks/boot/oneshot
-install_bin task_tick     tasks/2s/tick
+install_bin task_ok           tasks/always/ok
+install_bin probe_ok          tasks/always/ok.check
+install_bin task_flap         tasks/always/flap
+install_bin task_ok           tasks/always/hangcheck
+install_bin probe_hang        tasks/always/hangcheck.check
+install_bin task_selftest     tasks/always/selftest
+install_bin task_exit_delayed tasks/always/midprobe
+install_bin probe_hang        tasks/always/midprobe.check
+install_bin task_ignore_term  tasks/always/ignoreterm
+install_bin probe_fail        tasks/always/ignoreterm.check
+install_bin task_ok           tasks/always/probefail
+install_bin probe_fail        tasks/always/probefail.check
+install_bin task_tree         tasks/always/tree
+install_bin probe_fail        tasks/always/tree.check
+install_bin task_oneshot      tasks/boot/oneshot
+install_bin task_tick         tasks/2s/tick
 
 if [ "${INIT_LOGD_FIXTURE:-1}" -ne 0 ]; then
     install_bin task_signal_logd tasks/boot/signal_logd
