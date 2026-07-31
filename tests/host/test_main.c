@@ -385,10 +385,28 @@ static void TestRules(void)
     CHECK((r->flags & RULE_CRITICAL) != 0);
     CHECK(r->maxRestarts == 3);
 
-    /* zero means "use the default", which is what keeps the table sparse */
+    /* inherit keeps the table sparse without sharing drop's value */
     CHECK(r->probeIntervalNs == 0);
-    CHECK(r->outPolicy == 0);
+    CHECK(r->outPolicy == LOGP_INHERIT);
     CHECK(rules[1].outPolicy == LOGP_DROP);
+
+    static const u8 combinations[][4] =
+    {
+        { LOGP_INHERIT, LOGP_INHERIT, CFG_STDOUT_POLICY, CFG_STDERR_POLICY },
+        { LOGP_DROP,    LOGP_INHERIT, LOGP_DROP,          CFG_STDERR_POLICY },
+        { LOGP_INHERIT, LOGP_DROP,    CFG_STDOUT_POLICY, LOGP_DROP },
+        { LOGP_DROP,    LOGP_DROP,    LOGP_DROP,          LOGP_DROP },
+    };
+    for(usize i = 0; i < sizeof(combinations) / sizeof(combinations[0]); i++)
+    {
+        CHECK(LogPolicyResolve(combinations[i][0], CFG_STDOUT_POLICY) ==
+              combinations[i][2]);
+        CHECK(LogPolicyResolve(combinations[i][1], CFG_STDERR_POLICY) ==
+              combinations[i][3]);
+    }
+    CHECK(LogPolicyResolve(LOGP_RING, CFG_STDOUT_POLICY) == LOGP_RING);
+    CHECK(LogPolicyResolve(LOGP_DISK, CFG_STDOUT_POLICY) == LOGP_DISK);
+    CHECK(LogPolicyResolve(LOGP_BOTH, CFG_STDOUT_POLICY) == LOGP_BOTH);
 }
 
 /* --------------------------------------------------------------- schedules */

@@ -15,6 +15,8 @@ static const TaskRule TASK_RULES[] =
 
     { .name = "oneshot", .outPolicy = LOGP_BOTH },
 
+    { .name = "signal_logd", .outPolicy = LOGP_BOTH },
+
     /* a check that never exits: timeouts have to count as failures on their
        own, or a probe that never reaps drops the task out of supervision */
     { .name = "hangcheck",

@@ -107,10 +107,11 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 
 /* ---- output routing --------------------------------------------------- */
 
-#define LOGP_DROP 0u   /* /dev/null, no capture */
-#define LOGP_RING 1u   /* RAM only, readable through the shared ring */
-#define LOGP_DISK 2u   /* batched to the log volume */
-#define LOGP_BOTH 3u
+#define LOGP_INHERIT 0u   /* use the CFG_ default */
+#define LOGP_DROP    1u   /* /dev/null, no capture */
+#define LOGP_RING    2u   /* RAM only, readable through the shared ring */
+#define LOGP_DISK    4u   /* batched to the log volume */
+#define LOGP_BOTH    (LOGP_RING | LOGP_DISK)
 
 /* Errors and crash output reach persistent storage, routine chatter does not.
  * A high-volume stream should be moved to LOGP_RING per task below: beyond the
@@ -118,6 +119,15 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
  * accident. */
 #define CFG_STDOUT_POLICY LOGP_RING
 #define CFG_STDERR_POLICY LOGP_BOTH
+
+#define LOGP_IS_ROUTE(p) \
+    ((p) == LOGP_DROP || (p) == LOGP_RING || \
+     (p) == LOGP_DISK || (p) == LOGP_BOTH)
+
+_Static_assert(LOGP_IS_ROUTE(CFG_STDOUT_POLICY),
+               "CFG_STDOUT_POLICY must be a concrete LOGP_ route");
+_Static_assert(LOGP_IS_ROUTE(CFG_STDERR_POLICY),
+               "CFG_STDERR_POLICY must be a concrete LOGP_ route");
 
 /* ---- per-task overrides ----------------------------------------------- */
 
@@ -136,8 +146,8 @@ typedef struct
     u64  probeIntervalNs;        /* 0 uses the CFG_PROBE_* defaults */
     u64  probeTimeoutNs;
     u64  graceNs;
-    u8   outPolicy;              /* 0 uses CFG_STDOUT_POLICY */
-    u8   errPolicy;
+    u8   outPolicy;              /* LOGP_INHERIT uses CFG_STDOUT_POLICY */
+    u8   errPolicy;              /* LOGP_INHERIT uses CFG_STDERR_POLICY */
 } TaskRule;
 
 /* Matched by name against every task, first hit wins. Tasks with no entry run

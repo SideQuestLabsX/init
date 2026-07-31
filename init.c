@@ -808,6 +808,7 @@ u64   Hash64(const void *data, usize n);
 
 bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
                    usize nameCap, const char *name);
+u8 LogPolicyResolve(u8 policy, u8 defaultPolicy);
 
 #ifndef INIT_HOSTED
 
@@ -1659,6 +1660,11 @@ usize RingPending(const LogRing *r)
 
 const TaskRule *TaskRuleFind(const char *name);
 
+u8 LogPolicyResolve(u8 policy, u8 defaultPolicy)
+{
+    return policy == LOGP_INHERIT ? defaultPolicy : policy;
+}
+
 /* First match wins. Most tasks have no entry and run on the defaults. */
 const TaskRule *TaskRuleFind(const char *name)
 {
@@ -2293,11 +2299,10 @@ static inline u64 SysBootNs(void)
 static inline u64 SysRealNs(void)
 { return SysNow(CLOCK_REALTIME); }
 
-static inline void SysSetNonBlock(i32 fd)
+static inline bool SysSetNonBlock(i32 fd)
 {
     isize fl = SysFcntl(fd, F_GETFL, 0);
-    if(fl >= 0)
-        SysFcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    return fl >= 0 && SysFcntl(fd, F_SETFL, fl | O_NONBLOCK) >= 0;
 }
 
 #if !defined(INIT_FIXTURE)
@@ -2330,8 +2335,6 @@ void LogRaw(const char *text, usize len);
 void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize n);
 void LogFlushPartial(LineBuf *lb, u8 stream, u8 task, u8 policy);
 
-u32  LogPolicyFlags(u8 policy);
-
 static LogRing *G_RING = NULL;
 static i32      G_CONSOLE_FD = 2;
 static bool     G_VERBOSE = true;
@@ -2345,13 +2348,6 @@ void LogAttach(LogRing *ring, i32 consoleFd)
 void LogSetVerbose(bool bOn)
 {
     G_VERBOSE = bOn;
-}
-
-u32 LogPolicyFlags(u8 policy)
-{
-    if(policy == LOGP_DISK || policy == LOGP_BOTH)
-        return LOG_F_DISK;
-    return 0;
 }
 
 /* text carries no trailing newline. The console gets one appended, the ring
@@ -2385,7 +2381,8 @@ static void LogEmit(u8 stream, u8 task, u8 policy, const char *text, usize len)
 {
     if(policy == LOGP_DROP || len == 0)
         return;
-    RingWrite(G_RING, stream, task, LogPolicyFlags(policy), text, len);
+    u32 flags = (policy & LOGP_DISK) != 0 ? LOG_F_DISK : 0;
+    RingWrite(G_RING, stream, task, flags, text, len);
 }
 
 void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize n)
@@ -2862,8 +2859,10 @@ static void TaskApplyRule(Task *t)
     t->probeTimeoutNs = (r != NULL && r->probeTimeoutNs != 0)
         ? r->probeTimeoutNs : CFG_PROBE_TIMEOUT_NS;
     t->graceNs = (r != NULL && r->graceNs != 0) ? r->graceNs : CFG_PROBE_GRACE_NS;
-    t->outPolicy = (r != NULL && r->outPolicy != 0) ? r->outPolicy : CFG_STDOUT_POLICY;
-    t->errPolicy = (r != NULL && r->errPolicy != 0) ? r->errPolicy : CFG_STDERR_POLICY;
+    t->outPolicy = LogPolicyResolve(r != NULL ? r->outPolicy : LOGP_INHERIT,
+                                    CFG_STDOUT_POLICY);
+    t->errPolicy = LogPolicyResolve(r != NULL ? r->errPolicy : LOGP_INHERIT,
+                                    CFG_STDERR_POLICY);
 }
 
 /* When a deadline-driven task next runs, on CLOCK_BOOTTIME like everything in
@@ -3059,6 +3058,30 @@ static void ProbeDiscard(Task *t, bool bLog)
     t->bProbeKilled = false;
 }
 
+#if FEATURE_LOG_CAPTURE
+static bool TaskCaptureOpen(Task *t, i32 fds[2], const char *stream)
+{
+    isize result = SysPipe2(fds, O_CLOEXEC);
+    if(result < 0)
+    {
+        LogF("%s: %s capture disabled, pipe failed (%d)",
+             TaskName(t), stream, (i32)result);
+        return false;
+    }
+
+    if(SysSetNonBlock(fds[0]))
+        return true;
+
+    SysClose(fds[0]);
+    SysClose(fds[1]);
+    fds[0] = -1;
+    fds[1] = -1;
+    LogF("%s: %s capture disabled, nonblocking setup failed",
+         TaskName(t), stream);
+    return false;
+}
+#endif
+
 void TaskStart(InitState *st, Task *t, u64 nowNs)
 {
     UNUSED(st);
@@ -3069,9 +3092,9 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
     i32 errPipe[2] = { -1, -1 };
 
 #if FEATURE_LOG_CAPTURE
-    if(t->outPolicy != LOGP_DROP && SysPipe2(outPipe, O_CLOEXEC) == 0)
+    if(t->outPolicy != LOGP_DROP && TaskCaptureOpen(t, outPipe, "stdout"))
         childOut = outPipe[1];
-    if(t->errPolicy != LOGP_DROP && SysPipe2(errPipe, O_CLOEXEC) == 0)
+    if(t->errPolicy != LOGP_DROP && TaskCaptureOpen(t, errPipe, "stderr"))
         childErr = errPipe[1];
 #endif
 
@@ -3098,10 +3121,6 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
 
     t->outFd = outPipe[0];
     t->errFd = errPipe[0];
-    if(t->outFd >= 0)
-        SysSetNonBlock(t->outFd);
-    if(t->errFd >= 0)
-        SysSetNonBlock(t->errFd);
 
     t->pid = pid;
     t->state = TS_RUNNING;
@@ -3123,7 +3142,8 @@ void TaskDrain(InitState *st, Task *t)
 
     for(i32 which = 0; which < 2; which++)
     {
-        i32 fd = which == 0 ? t->outFd : t->errFd;
+        i32 *fdSlot = which == 0 ? &t->outFd : &t->errFd;
+        i32 fd = *fdSlot;
         if(fd < 0)
             continue;
 
@@ -3141,20 +3161,14 @@ void TaskDrain(InitState *st, Task *t)
             }
             if(n == -EINTR)
                 continue;
-            if(n == 0)
-            {
-                LogFlushPartial(lb, stream, idx, policy);
-                if(which == 0)
-                {
-                    SysClose(t->outFd);
-                    t->outFd = -1;
-                }
-                else
-                {
-                    SysClose(t->errFd);
-                    t->errFd = -1;
-                }
-            }
+            if(n == -EAGAIN)
+                break;
+            if(n < 0)
+                LogF("%s: %s capture read failed (%d)", TaskName(t),
+                     which == 0 ? "stdout" : "stderr", (i32)n);
+            LogFlushPartial(lb, stream, idx, policy);
+            SysClose(fd);
+            *fdSlot = -1;
             break;
         }
     }

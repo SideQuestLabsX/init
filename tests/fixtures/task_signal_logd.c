@@ -50,8 +50,12 @@ static i32 FindLogWriter(void)
 
 void FixtureMain(void)
 {
+    SysWrite(1, "partial-stdout-line", sizeof("partial-stdout-line") - 1);
+
     /* Wait past the first boot-test flush so earlier records survive the kill */
     FixtureSleep(1500ull * NS_PER_MS);
+    SysWrite(1, "\n", 1);
+
     i32 pid = FindLogWriter();
     if(pid < 0 || SysKill(pid, SIGTERM) < 0)
     {
@@ -60,5 +64,8 @@ void FixtureMain(void)
     }
 
     FixtureSay("FIXTURE log writer signaled");
-    SysExit(0);
+
+    /* Keep the pipe open so a blocking drain cannot reach the shutdown path */
+    for(;;)
+        FixtureSleep(NS_PER_SEC);
 }

@@ -88,4 +88,5 @@ fi
 if [ "$MARKER_CAPTURE" -ne 0 ]; then
     expect "ok-stderr-line"
     expect "flap-dying"
+    expect "partial-stdout-line"
 fi
