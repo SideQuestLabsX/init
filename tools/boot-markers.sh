@@ -12,9 +12,10 @@ MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 MARKER_SNTP="${MARKER_SNTP:-1}"
 
 expect "init $ARCH starting, pid 1"
-expect "${EXPECT_TASKS:-17} tasks in /tasks"
+expect "${EXPECT_TASKS:-20} tasks in /tasks"
 expect "ok: started pid"
 expect "FIXTURE ok started"
+expect "FIXTURE log edge line sent"
 expect "FIXTURE oneshot ran"
 expect "oneshot: done"
 reject "not a schedule"
@@ -35,6 +36,10 @@ fi
 if [ "$MARKER_LOGD" -ne 0 ]; then
     expect "FIXTURE log writer signaled"
     expect "log writer exited (exit -1 sig 15), respawning in"
+    expect "FIXTURE log writer stopped"
+    expect "log writer stalled, killing pid"
+    expect "stalled log writer respawning in 100ms"
+    expect "FIXTURE stalled log writer replaced"
 fi
 
 if [ -n "$MARKER_NS_TIER" ]; then
@@ -95,4 +100,9 @@ if [ "$MARKER_CAPTURE" -ne 0 ]; then
     expect "ok-stderr-line"
     expect "flap-dying"
     expect "partial-stdout-line"
+    expect "LOGEDGE-HEAD"
+    expect "LOGEDGE-B1"
+    expect "LOGEDGE-B2"
+    expect "LOGINTERLEAVE-B"
+    expect "FIXTURE interleaved log verified"
 fi

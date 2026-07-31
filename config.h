@@ -44,7 +44,9 @@
 #define CFG_MAX_TASK_DIRS   16
 #define CFG_LINE_MAX        512
 #define CFG_ARENA_BYTES     (256u * 1024u)
-#define CFG_LOG_RING_BYTES  (128u * 1024u)
+
+/* Holds 1024 slots plus the ring header */
+#define CFG_LOG_RING_BYTES  (132u * 1024u)
 
 _Static_assert(CFG_PATH_MAX >= CFG_NAME_MAX + sizeof(CFG_TASK_DIR) + 8,
                "CFG_PATH_MAX cannot hold a task and check path");
@@ -88,6 +90,14 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 #define CFG_LOGD_FLUSH_BYTES (32u * 1024u)
 #define CFG_LOGD_MAX_BYTES   (2u * 1024u * 1024u)
 #define CFG_LOGD_ROTATIONS   3
+
+_Static_assert(CFG_LOGD_BUF_BYTES <= CFG_LOGD_MAX_BYTES,
+               "log buffer must fit within one rotation");
+
+/* A writer heartbeat unchanged for this long is treated as stalled */
+#ifndef CFG_LOGD_STALL_NS
+  #define CFG_LOGD_STALL_NS (30ull * NS_PER_SEC)
+#endif
 
 /* ---- wall clock ------------------------------------------------------- */
 

@@ -80,9 +80,10 @@ CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS)
 BOOT_SNTP_SERVER ?= 127.0.0.1
 BOOT_SNTP_PORT   ?= 40123
 ifeq ($(BOOT_TEST),1)
-  CFLAGS += -DCFG_LOGD_FLUSH_NS=500000000ull \
+  CFLAGS += -DCFG_LOGD_FLUSH_NS=2000000000ull \
             -DCFG_STABLE_NS=500000000ull \
             -DCFG_RESTART_GRACE_NS=500000000ull \
+            -DCFG_LOGD_STALL_NS=1000000000ull \
             -DCFG_SNTP_SERVER='"$(BOOT_SNTP_SERVER)"' \
             -DCFG_SNTP_PORT=$(BOOT_SNTP_PORT) \
             -DCFG_SNTP_RETRY_NS=250000000ull \
@@ -183,6 +184,8 @@ test-ns:
 	        all fixtures
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_LOG_SYMLINK=1 \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 check: test abi-check all test-ns test-qemu
 
@@ -231,6 +234,9 @@ test-variant:
 	fi; \
 	if [ "$$v" = FEATURE_LOG_CAPTURE=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1"; \
+	fi; \
+	if [ "$$v" = FEATURE_LOG_DISK=0 ]; then \
+		fixture_extra="$$fixture_extra -DFIXTURE_LOG_DISK_DISABLED=1"; \
 	fi; \
 	build="build/variant-$$k"; \
 	rm -rf "$$build"; \

@@ -487,6 +487,23 @@ static void TestRing(void)
     CHECK(parts == 3);
     CHECK(conts == 2);
 
+    LogSlot same = { .len = 4, .stream = LOG_SRC_ERR, .task = 2,
+                     .flags = LOG_F_DISK };
+    LogIdentity identity = {0};
+    LogIdentitySet(&identity, &same, same.flags, 1234);
+    CHECK(LogIdentityMatch(&identity, &same, same.flags, 1234));
+    same.task++;
+    CHECK(!LogIdentityMatch(&identity, &same, same.flags, 1234));
+    same.task--;
+    same.stream = LOG_SRC_OUT;
+    CHECK(!LogIdentityMatch(&identity, &same, same.flags, 1234));
+    same.stream = LOG_SRC_ERR;
+    same.len++;
+    CHECK(!LogIdentityMatch(&identity, &same, same.flags, 1234));
+    same.len--;
+    CHECK(!LogIdentityMatch(&identity, &same, 0, 1234));
+    CHECK(!LogIdentityMatch(&identity, &same, same.flags, 5678));
+
     CHECK(RingInit(r, sizeof(G_RING_MEM)));
     RingSeq wrapStart = ~(RingSeq)0 - 1;
     __atomic_store_n(&r->head, wrapStart, __ATOMIC_RELAXED);

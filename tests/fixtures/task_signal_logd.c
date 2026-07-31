@@ -48,6 +48,27 @@ static i32 FindLogWriter(void)
     return -1;
 }
 
+static i32 WaitForOtherWriter(i32 excludePid, usize attempts)
+{
+    for(usize i = 0; i < attempts; i++)
+    {
+        i32 pid = FindLogWriter();
+        if(pid > 0 && pid != excludePid)
+            return pid;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return -1;
+}
+
+static bool Touch(const char *path)
+{
+    isize fd = SysOpen(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+    if(fd < 0)
+        return false;
+    SysClose((i32)fd);
+    return true;
+}
+
 #ifndef FIXTURE_CAPTURE_DISABLED
 static bool LogContains(const char *needle)
 {
@@ -97,7 +118,7 @@ void FixtureMain(void)
 {
     SysWrite(1, "partial-stdout-line", sizeof("partial-stdout-line") - 1);
 
-    /* Wait past the first boot-test flush so earlier records survive the kill */
+    /* Keep the line partial across multiple capture reads */
     FixtureSleep(1500ull * NS_PER_MS);
     SysWrite(1, "\n", 1);
 
@@ -119,6 +140,36 @@ void FixtureMain(void)
     }
 
     FixtureSay("FIXTURE log writer signaled");
+
+    i32 respawned = WaitForOtherWriter(pid, 20);
+    if(respawned < 0)
+    {
+        FixtureSay("FIXTURE respawned log writer not found");
+        SysExit(1);
+    }
+
+    FixtureSleep(750ull * NS_PER_MS);
+
+    /* SIGSTOP models a live writer making no progress */
+    if(SysKill(respawned, SIGSTOP) < 0)
+    {
+        FixtureSay("FIXTURE log writer stop failed");
+        SysExit(1);
+    }
+    FixtureSay("FIXTURE log writer stopped");
+
+    i32 replaced = WaitForOtherWriter(respawned, 40);
+    if(replaced < 0)
+    {
+        FixtureSay("FIXTURE stalled log writer was not replaced");
+        SysExit(1);
+    }
+    FixtureSay("FIXTURE stalled log writer replaced");
+    if(!Touch("/var/log/logd-fixture-done"))
+    {
+        FixtureSay("FIXTURE log writer completion failed");
+        SysExit(1);
+    }
 
     /* Keep the pipe open so a blocking drain cannot reach the shutdown path */
     for(;;)

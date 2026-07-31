@@ -101,6 +101,7 @@ esac
 logd_fixture=1
 privilege_fixtures=1
 sntp_fixture=1
+log_symlink=${INIT_LOG_SYMLINK:-0}
 case "${FEATURE_VARIANT:-}" in
     OFFLINE_MODE=1)
         sntp_fixture=0
@@ -112,14 +113,18 @@ case "${FEATURE_VARIANT:-}" in
         privilege_fixtures=0
         ;;
 esac
+if [ "$log_symlink" -ne 0 ]; then
+    logd_fixture=0
+fi
 
 INIT_NS_ACTIVE_TIER="$ns_tier" \
 INIT_LOGD_FIXTURE=$logd_fixture \
 INIT_SNTP_FIXTURE=$sntp_fixture \
 INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
+INIT_LOG_SYMLINK=$log_symlink \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((16 + sntp_fixture + logd_fixture + 2 * privilege_fixtures))
+task_count=$((19 + sntp_fixture + logd_fixture + 2 * privilege_fixtures))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
@@ -174,7 +179,23 @@ reject()
 
 echo "checking markers:"
 MARKER_NAMESPACE=1
+if [ "$log_symlink" -ne 0 ]; then
+    MARKER_LOGD=0
+    MARKER_LOGFILE=0
+    MARKER_CAPTURE=0
+    MARKER_CHILD_ERROR=0
+fi
 . "${BOOT_MARKERS:-tools/boot-markers.sh}"
+
+if [ "$log_symlink" -ne 0 ]; then
+    if [ -L "$STAGE/var/log/init.log" ] &&
+       [ "$(cat "$STAGE/var/log/sentinel")" = SENTINEL-UNTOUCHED ]; then
+        echo "  ok    log symlink target unchanged"
+    else
+        echo "  BAD   log symlink target changed"
+        fail=1
+    fi
+fi
 
 if [ $RC -eq 124 ]; then
     echo "  BAD   timed out after ${TIMEOUT}s without shutting down"

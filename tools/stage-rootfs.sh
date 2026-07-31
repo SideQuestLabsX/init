@@ -21,6 +21,13 @@ mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/sys" "$STAGE/var/log" \
 cp "$BUILD/init" "$STAGE/init"
 chmod 0755 "$STAGE/init"
 
+# The namespace symlink mode checks that the target stays untouched
+if [ "${INIT_LOG_SYMLINK:-0}" -ne 0 ]; then
+    printf 'SENTINEL-UNTOUCHED\n' > "$STAGE/var/log/sentinel"
+    ln -s sentinel "$STAGE/var/log/init.log"
+    : > "$STAGE/dev/log-symlink-test"
+fi
+
 install_bin()
 {
     cp "$BUILD/fixtures/$1" "$STAGE/$2"
@@ -29,6 +36,9 @@ install_bin()
 
 install_bin task_ok           tasks/always/ok
 install_bin probe_ok          tasks/always/ok.check
+install_bin task_log_edge     tasks/always/log_edge
+install_bin task_log_interleave_a tasks/always/log_interleave_a
+install_bin task_log_interleave_b tasks/always/log_interleave_b
 install_bin task_flap         tasks/always/flap
 install_bin task_ok           tasks/always/hangcheck
 install_bin probe_hang        tasks/always/hangcheck.check
@@ -50,6 +60,7 @@ fi
 
 if [ "${INIT_LOGD_FIXTURE:-1}" -ne 0 ]; then
     install_bin task_signal_logd tasks/boot/signal_logd
+    : > "$STAGE/var/log/logd-fixture-expected"
 fi
 
 if [ -n "${INIT_NS_ACTIVE_TIER:-}" ] &&

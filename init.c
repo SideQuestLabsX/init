@@ -1537,6 +1537,35 @@ typedef struct
     char text[LOG_TEXT_MAX];
 } LogSlot;
 
+typedef struct
+{
+    bool bValid;
+    u8   task;
+    u8   stream;
+    u16  len;
+    u32  flags;
+    u64  hash;
+} LogIdentity;
+
+bool LogIdentityMatch(const LogIdentity *identity, const LogSlot *slot,
+                      u32 flags, u64 hash)
+{
+    return identity->bValid && identity->task == slot->task &&
+           identity->stream == slot->stream && identity->len == slot->len &&
+           identity->flags == flags && identity->hash == hash;
+}
+
+void LogIdentitySet(LogIdentity *identity, const LogSlot *slot,
+                    u32 flags, u64 hash)
+{
+    identity->bValid = true;
+    identity->task = slot->task;
+    identity->stream = slot->stream;
+    identity->len = slot->len;
+    identity->flags = flags;
+    identity->hash = hash;
+}
+
 #define LOG_SLOT_WORDS   (LOG_SLOT_BYTES / sizeof(RingSeq))
 #define LOG_PAYLOAD_WORDS (LOG_SLOT_WORDS - 1)
 
@@ -1558,6 +1587,7 @@ typedef struct
     RingSeq tail;       /* monotonic, owned by the writer */
     RingSeq dropped;
     RingSeq control;
+    RingSeq writerProgress;
     RingSlot slot[];
 } LogRing;
 
@@ -2397,7 +2427,6 @@ typedef struct
 {
     char  buf[CFG_LINE_MAX];
     usize len;
-    bool  bTruncating;   /* dropping the tail of an over-long line */
 } LineBuf;
 
 void LogAttach(LogRing *ring, i32 consoleFd);
@@ -2407,9 +2436,7 @@ void LogSetVerbose(bool bOn);
 void LogF(const char *fmt, ...);
 void LogRaw(const char *text, usize len);
 
-/* Splits a pipe read into lines at the configured policy. Partial lines are
- * held until the next read. A line over CFG_LINE_MAX is emitted truncated and
- * the rest discarded. */
+/* Oversized lines are emitted as lossless continuation records */
 void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize n);
 void LogFlushPartial(LineBuf *lb, u8 stream, u8 task, u8 policy);
 
@@ -2455,11 +2482,13 @@ void LogF(const char *fmt, ...)
     LogRaw(line, n);
 }
 
-static void LogEmit(u8 stream, u8 task, u8 policy, const char *text, usize len)
+static void LogEmit(u8 stream, u8 task, u8 policy, u32 extraFlags, const char *text, usize len)
 {
     if(policy == LOGP_DROP || len == 0)
         return;
-    u32 flags = (policy & LOGP_DISK) != 0 ? LOG_F_DISK : 0;
+    u32 flags = extraFlags;
+    if((policy & LOGP_DISK) != 0)
+        flags |= LOG_F_DISK;
     RingWrite(G_RING, stream, task, flags, text, len);
 }
 
@@ -2470,10 +2499,8 @@ void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize
         char c = data[i];
         if(c == '\n')
         {
-            if(!lb->bTruncating || lb->len > 0)
-                LogEmit(stream, task, policy, lb->buf, lb->len);
+            LogEmit(stream, task, policy, 0, lb->buf, lb->len);
             lb->len = 0;
-            lb->bTruncating = false;
             continue;
         }
         if(c == '\r')
@@ -2481,10 +2508,9 @@ void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize
 
         if(lb->len + 1 >= sizeof(lb->buf))
         {
-            LogEmit(stream, task, policy, lb->buf, lb->len);
+            /* The triggering byte starts the next fragment */
+            LogEmit(stream, task, policy, LOG_F_CONT, lb->buf, lb->len);
             lb->len = 0;
-            lb->bTruncating = true;
-            continue;
         }
         lb->buf[lb->len++] = c;
     }
@@ -2494,10 +2520,9 @@ void LogFlushPartial(LineBuf *lb, u8 stream, u8 task, u8 policy)
 {
     if(lb->len > 0)
     {
-        LogEmit(stream, task, policy, lb->buf, lb->len);
+        LogEmit(stream, task, policy, 0, lb->buf, lb->len);
         lb->len = 0;
     }
-    lb->bTruncating = false;
 }
 
 /* ======================================================================
@@ -2648,6 +2673,9 @@ typedef struct
     i32          logdPid;
     u64          logdBackoffNs;
     u64          logdNextSpawnNs;
+    u64          logdStartedNs;
+    u64          logdProgressSeen;
+    u64          logdProgressSeenNs;
 
     i32          sntpFd;
     u64          sntpNextNs;
@@ -2692,6 +2720,7 @@ void SntpHandleReply(InitState *st, u64 nowNs);
 
 void LogdSupervise(InitState *st, u64 nowNs);
 bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs);
+void LogdCheckStall(InitState *st, u64 nowNs);
 NORETURN void LogWriterMain(InitState *st);
 
 NORETURN void ChildFail(const char *step, isize result);
@@ -3924,14 +3953,28 @@ void SntpHandleReply(InitState *st, u64 nowNs)
 
 typedef struct
 {
+    bool  bOpen;
+    usize end;
+} LogdChain;
+
+typedef struct
+{
+    LogdChain task[CFG_MAX_TASKS][2];
+    LogdChain init;
+} LogdChains;
+
+typedef struct
+{
     char  buf[CFG_LOGD_BUF_BYTES];
     usize len;
     i32   fd;
     u64   fileBytes;
     u64   lastFlushNs;
 
-    u64   lastHash;
+    LogIdentity last;
     u32   repeats;
+
+    LogdChains chains;
 } LogdState;
 
 static void LogdSleep(u64 ns)
@@ -3942,7 +3985,7 @@ static void LogdSleep(u64 ns)
     SysPpoll(NULL, 0, &ts, NULL);
 }
 
-static void LogdRotate(LogdState *ls)
+static bool LogdRotate(LogdState *ls)
 {
     if(ls->fd >= 0)
     {
@@ -3952,6 +3995,7 @@ static void LogdRotate(LogdState *ls)
 
     char from[CFG_PATH_MAX];
     char to[CFG_PATH_MAX];
+    bool bActiveReady = false;
 
     for(u32 i = CFG_LOGD_ROTATIONS; i > 0; i--)
     {
@@ -3960,10 +4004,20 @@ static void LogdRotate(LogdState *ls)
         else
             Fmt(from, sizeof(from), "%s.%u", CFG_LOG_PATH, i - 1);
         Fmt(to, sizeof(to), "%s.%u", CFG_LOG_PATH, i);
-        SysRename(from, to);
+
+        isize rc = SysRename(from, to);
+        if(rc < 0 && rc != -ENOENT)
+        {
+            LogF("log rotation %s to %s failed (%d)", from, to, (i32)rc);
+            return false;
+        }
+        if(i == 1 && (rc >= 0 || rc == -ENOENT))
+            bActiveReady = true;
     }
 
-    ls->fileBytes = 0;
+    if(bActiveReady)
+        ls->fileBytes = 0;
+    return bActiveReady;
 }
 
 static bool LogdOpen(LogdState *ls)
@@ -3971,13 +4025,20 @@ static bool LogdOpen(LogdState *ls)
     if(ls->fd >= 0)
         return true;
 
-    isize fd = SysOpen(CFG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0640);
+    isize fd = SysOpen(CFG_LOG_PATH,
+                        O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0640);
     if(fd < 0)
         return false;
 
     ls->fd = (i32)fd;
     isize end = SysLseek(ls->fd, 0, SEEK_END);
-    ls->fileBytes = end > 0 ? (u64)end : 0;
+    if(end < 0)
+    {
+        SysClose(ls->fd);
+        ls->fd = -1;
+        return false;
+    }
+    ls->fileBytes = (u64)end;
     return true;
 }
 
@@ -3986,8 +4047,15 @@ static void LogdFlush(LogdState *ls, u64 nowNs)
     ls->lastFlushNs = nowNs;
     if(ls->len == 0)
         return;
+
     if(!LogdOpen(ls))
-        return;   /* volume not mounted yet, keep buffering */
+        return;
+    if(ls->fileBytes >= CFG_LOGD_MAX_BYTES ||
+       ls->len > (usize)(CFG_LOGD_MAX_BYTES - ls->fileBytes))
+    {
+        if(!LogdRotate(ls) || !LogdOpen(ls))
+            return;
+    }
 
     usize off = 0;
     while(off < ls->len)
@@ -3999,33 +4067,86 @@ static void LogdFlush(LogdState *ls, u64 nowNs)
         {
             SysClose(ls->fd);
             ls->fd = -1;
-            return;
+            break;
         }
         off += (usize)n;
     }
 
-    ls->fileBytes += ls->len;
-    ls->len = 0;
-
-    if(ls->fileBytes >= CFG_LOGD_MAX_BYTES)
-        LogdRotate(ls);
+    /* Preserve only the unwritten suffix after a partial failure */
+    if(off > 0)
+    {
+        memmove(ls->buf, ls->buf + off, ls->len - off);
+        ls->len -= off;
+        ls->fileBytes += off;
+    }
 }
 
-static void LogdAppend(LogdState *ls, const char *text, usize len, u64 nowNs)
+static void LogdBreakChains(LogdState *ls)
+{
+    memset(&ls->chains, 0, sizeof(ls->chains));
+    ls->last.bValid = false;
+}
+
+static bool LogdReserve(LogdState *ls, usize len, u64 nowNs)
+{
+    if(len <= sizeof(ls->buf) - ls->len)
+        return true;
+
+    LogdBreakChains(ls);
+    LogdFlush(ls, nowNs);
+    if(len <= sizeof(ls->buf) - ls->len)
+        return true;
+
+    return false;
+}
+
+static bool LogdAppend(LogdState *ls, const char *text, usize len, usize *endOut,
+                       u64 nowNs)
 {
     if(len + 1 > sizeof(ls->buf))
         len = sizeof(ls->buf) - 1;
-    if(ls->len + len + 1 > sizeof(ls->buf))
-        LogdFlush(ls, nowNs);
-    if(ls->len + len + 1 > sizeof(ls->buf))
-    {
-        /* still no room, so the volume is gone and the buffer is full */
-        ls->len = 0;
-    }
+    if(!LogdReserve(ls, len + 1, nowNs))
+        return false;
 
     memcpy(ls->buf + ls->len, text, len);
     ls->len += len;
+    if(endOut != NULL)
+        *endOut = ls->len;
     ls->buf[ls->len++] = '\n';
+    return true;
+}
+
+static void LogdShiftChainEnds(LogdChains *chains, usize from, usize amount)
+{
+    if(chains->init.bOpen && chains->init.end >= from)
+        chains->init.end += amount;
+    for(usize i = 0; i < CFG_MAX_TASKS; i++)
+    {
+        for(usize stream = 0; stream < 2; stream++)
+        {
+            LogdChain *chain = &chains->task[i][stream];
+            if(chain->bOpen && chain->end >= from)
+                chain->end += amount;
+        }
+    }
+}
+
+static bool LogdInsertChain(LogdState *ls, LogdChain *chain, const char *text,
+                            usize len, u64 nowNs)
+{
+    if(len > sizeof(ls->buf) - ls->len)
+    {
+        LogdBreakChains(ls);
+        LogdFlush(ls, nowNs);
+        return false;
+    }
+
+    usize at = chain->end;
+    memmove(ls->buf + at + len, ls->buf + at, ls->len - at);
+    memcpy(ls->buf + at, text, len);
+    ls->len += len;
+    LogdShiftChainEnds(&ls->chains, at, len);
+    return true;
 }
 
 /* damped dedup: during a crash loop this is kilobytes instead of megabytes */
@@ -4036,28 +4157,74 @@ static void LogdEmitRepeats(LogdState *ls, u64 nowNs)
 
     char line[64];
     usize n = Fmt(line, sizeof(line), "last message repeated %u times", ls->repeats);
-    ls->repeats = 0;
-    LogdAppend(ls, line, n, nowNs);
+    if(LogdAppend(ls, line, n, NULL, nowNs))
+        ls->repeats = 0;
+}
+
+/* Unknown task ids use the standalone path */
+static LogdChain *LogdChainSlot(LogdChains *chains, const LogSlot *slot)
+{
+    if(slot->task == 0xff)
+        return &chains->init;
+    if(slot->task >= CFG_MAX_TASKS)
+        return NULL;
+    return &chains->task[slot->task][slot->stream == LOG_SRC_ERR ? 1 : 0];
+}
+
+static void LogdRecordTag(char *line, usize cap, u64 nowNs, const LogSlot *slot)
+{
+    const char *tag = slot->stream == LOG_SRC_ERR ? "E" :
+                      (slot->stream == LOG_SRC_OUT ? "O" : "I");
+    Fmt(line, cap, "[%llu] %s%u ", nowNs / NS_PER_SEC, tag, (u32)slot->task);
 }
 
 static void LogdRecord(LogdState *ls, const LogSlot *slot, u64 nowNs)
 {
-    u64 h = Hash64(slot->text, slot->len);
-    if(h == ls->lastHash)
+    LogdChain *chain = LogdChainSlot(&ls->chains, slot);
+    bool bWasOpen = chain != NULL && chain->bOpen;
+    bool bMoreToCome = chain != NULL && (slot->flags & LOG_F_CONT) != 0;
+
+    if(!bWasOpen && !bMoreToCome)
     {
-        ls->repeats++;
+        u64 h = Hash64(slot->text, slot->len);
+        u32 identityFlags = slot->flags & (u32)~LOG_F_CONT;
+        if(LogIdentityMatch(&ls->last, slot, identityFlags, h))
+        {
+            ls->repeats++;
+            return;
+        }
+
+        LogdEmitRepeats(ls, nowNs);
+        LogIdentitySet(&ls->last, slot, identityFlags, h);
+
+        char line[LOG_TEXT_MAX + 32];
+        LogdRecordTag(line, sizeof(line), nowNs, slot);
+        usize n = StrLen(line);
+        n += StrCopyN(line + n, sizeof(line) - n, slot->text, slot->len);
+        LogdAppend(ls, line, n, NULL, nowNs);
         return;
     }
 
     LogdEmitRepeats(ls, nowNs);
-    ls->lastHash = h;
+    ls->last.bValid = false;
+
+    if(bWasOpen && LogdInsertChain(ls, chain, slot->text, slot->len, nowNs))
+    {
+        if(!bMoreToCome)
+            chain->bOpen = false;
+        return;
+    }
 
     char line[LOG_TEXT_MAX + 32];
-    const char *tag = slot->stream == LOG_SRC_ERR ? "E" :
-                      (slot->stream == LOG_SRC_OUT ? "O" : "I");
-    usize n = Fmt(line, sizeof(line), "[%llu] %s%u ", nowNs / NS_PER_SEC, tag, (u32)slot->task);
+    LogdRecordTag(line, sizeof(line), nowNs, slot);
+    usize n = StrLen(line);
     n += StrCopyN(line + n, sizeof(line) - n, slot->text, slot->len);
-    LogdAppend(ls, line, n, nowNs);
+    usize end = 0;
+    if(LogdAppend(ls, line, n, &end, nowNs) && chain != NULL && bMoreToCome)
+    {
+        chain->bOpen = true;
+        chain->end = end;
+    }
 }
 
 NORETURN void LogWriterMain(InitState *st)
@@ -4093,8 +4260,13 @@ NORETURN void LogWriterMain(InitState *st)
     ls.fd = -1;
     ls.lastFlushNs = SysBootNs();
 
+    RingSeq progress = __atomic_load_n(&st->ring->writerProgress, __ATOMIC_RELAXED);
+
     for(;;)
     {
+        /* A blocked write freezes the heartbeat */
+        __atomic_store_n(&st->ring->writerProgress, ++progress, __ATOMIC_RELEASE);
+
         u64 nowNs = SysBootNs();
         LogSlot slot;
         u64 lostTotal = 0;
@@ -4102,13 +4274,24 @@ NORETURN void LogWriterMain(InitState *st)
 
         for(;;)
         {
+            if(sizeof(ls.buf) - ls.len < 384)
+            {
+                LogdBreakChains(&ls);
+                LogdEmitRepeats(&ls, nowNs);
+                LogdFlush(&ls, nowNs);
+                if(sizeof(ls.buf) - ls.len < 384)
+                    break;
+            }
+
             u64 lost = 0;
-            if(!RingRead(st->ring, &slot, &lost))
+            bool bRead = RingRead(st->ring, &slot, &lost);
+            if(lost > 0)
             {
                 lostTotal += lost;
-                break;
+                LogdBreakChains(&ls);
             }
-            lostTotal += lost;
+            if(!bRead)
+                break;
             if((slot.flags & LOG_F_DISK) != 0)
                 LogdRecord(&ls, &slot, nowNs);
             if(++drained >= 256)
@@ -4121,7 +4304,7 @@ NORETURN void LogWriterMain(InitState *st)
             usize n = Fmt(line, sizeof(line), "ring overflow, %llu records dropped",
                           lostTotal);
             LogdEmitRepeats(&ls, nowNs);
-            LogdAppend(&ls, line, n, nowNs);
+            LogdAppend(&ls, line, n, NULL, nowNs);
         }
 
         bool bStopping = st->ring != NULL &&
@@ -4130,6 +4313,7 @@ NORETURN void LogWriterMain(InitState *st)
         bool bDue = nowNs - ls.lastFlushNs >= CFG_LOGD_FLUSH_NS;
         if(bDue || bStopping || ls.len >= CFG_LOGD_FLUSH_BYTES)
         {
+            LogdBreakChains(&ls);
             LogdEmitRepeats(&ls, nowNs);
             LogdFlush(&ls, nowNs);
         }
@@ -4163,6 +4347,9 @@ void LogdSupervise(InitState *st, u64 nowNs)
     }
 
     st->logdPid = (i32)pid;
+    st->logdStartedNs = nowNs;
+    st->logdProgressSeen = __atomic_load_n(&st->ring->writerProgress, __ATOMIC_RELAXED);
+    st->logdProgressSeenNs = nowNs;
     LogF("log writer pid %d", st->logdPid);
 }
 
@@ -4185,6 +4372,49 @@ bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs)
     return true;
 }
 
+void LogdCheckStall(InitState *st, u64 nowNs)
+{
+    if(st->ring == NULL || st->logdPid <= 0 || st->bShutdown)
+        return;
+
+    RingSeq progress = __atomic_load_n(&st->ring->writerProgress, __ATOMIC_ACQUIRE);
+    if(progress != st->logdProgressSeen)
+    {
+        st->logdProgressSeen = progress;
+        st->logdProgressSeenNs = nowNs;
+        if(BackoffStable(st->logdStartedNs, nowNs))
+            st->logdBackoffNs = 0;
+        return;
+    }
+
+    if(nowNs - st->logdProgressSeenNs >= CFG_LOGD_STALL_NS)
+    {
+        i32 pid = st->logdPid;
+        i32 status = 0;
+        if(SysWait4(pid, &status, WNOHANG) == pid)
+        {
+            LogdReap(st, pid, status, nowNs);
+            return;
+        }
+
+        LogF("log writer stalled, killing pid %d", pid);
+        isize rc = SysKill(pid, SIGKILL);
+        if(rc < 0)
+        {
+            LogF("log writer kill failed (%d)", (i32)rc);
+            st->logdProgressSeenNs = nowNs;
+            return;
+        }
+
+        st->logdPid = 0;
+        st->logdBackoffNs = BackoffNext(st->logdBackoffNs);
+        st->logdNextSpawnNs = nowNs + st->logdBackoffNs;
+        LogF("stalled log writer respawning in %ums",
+             (u32)(st->logdBackoffNs / NS_PER_MS));
+        st->logdProgressSeenNs = nowNs;
+    }
+}
+
 #else
 
 void LogdSupervise(InitState *st, u64 nowNs)
@@ -4200,6 +4430,12 @@ bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs)
     UNUSED(status);
     UNUSED(nowNs);
     return false;
+}
+
+void LogdCheckStall(InitState *st, u64 nowNs)
+{
+    UNUSED(st);
+    UNUSED(nowNs);
 }
 
 NORETURN void LogWriterMain(InitState *st)
@@ -4680,8 +4916,10 @@ static u64 NextDeadline(InitState *st, u64 nowNs)
     u64 best = TaskNextDeadline(st, nowNs);
     if(st->bShutdown && st->shutdownDeadlineNs < best)
         best = st->shutdownDeadlineNs;
+#if FEATURE_LOG_DISK
     if(!st->bShutdown && st->logdPid <= 0 && st->logdNextSpawnNs < best)
         best = st->logdNextSpawnNs;
+#endif
     return best;
 }
 
@@ -4731,6 +4969,7 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
             TaskTick(st, nowNs);
             SntpTick(st, nowNs);
             LogdSupervise(st, nowNs);
+            LogdCheckStall(st, nowNs);
             WdogTick(st, nowNs);
         }
 
