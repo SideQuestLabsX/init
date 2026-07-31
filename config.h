@@ -99,10 +99,16 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 /* ---- time sync -------------------------------------------------------- */
 
 /* dotted quad only, init resolves no hostnames */
-#define CFG_SNTP_SERVER     "162.159.200.1"
-#define CFG_SNTP_PORT       123
+#ifndef CFG_SNTP_SERVER
+  #define CFG_SNTP_SERVER   "162.159.200.1"
+#endif
+#ifndef CFG_SNTP_PORT
+  #define CFG_SNTP_PORT     123
+#endif
 #define CFG_SNTP_POLL_NS    (3600ull * NS_PER_SEC)
-#define CFG_SNTP_RETRY_NS   (60ull * NS_PER_SEC)
+#ifndef CFG_SNTP_RETRY_NS
+  #define CFG_SNTP_RETRY_NS (60ull * NS_PER_SEC)
+#endif
 #define CFG_SNTP_TIMEOUT_NS (5ull * NS_PER_SEC)
 
 /* ---- output routing --------------------------------------------------- */

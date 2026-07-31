@@ -218,6 +218,7 @@ SAME(SYS_fcntl, __NR_fcntl);
 SAME(SYS_getpid, __NR_getpid);
 SAME(SYS_socket, __NR_socket);
 SAME(SYS_connect, __NR_connect);
+SAME(SYS_bind, __NR_bind);
 SAME(SYS_sendto, __NR_sendto);
 SAME(SYS_recvfrom, __NR_recvfrom);
 SAME(SYS_setsockopt, __NR_setsockopt);

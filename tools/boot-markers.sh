@@ -9,6 +9,7 @@ MARKER_CHILD_ERROR="${MARKER_CHILD_ERROR:-1}"
 MARKER_PROBES="${MARKER_PROBES:-1}"
 MARKER_LOGFILE="${MARKER_LOGFILE:-1}"
 MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
+MARKER_SNTP="${MARKER_SNTP:-1}"
 
 expect "init $ARCH starting, pid 1"
 expect "${EXPECT_TASKS:-17} tasks in /tasks"
@@ -25,6 +26,11 @@ expect "shutdown requested by signal 10"
 expect "syncing"
 reject "PANIC"
 reject "Kernel panic"
+
+if [ "$MARKER_SNTP" -ne 0 ] && [ "${MARKER_NAMESPACE:-0}" -ne 0 ]; then
+    expect "FIXTURE sntp reply sent"
+    expect "sntp: clock_settime rejected"
+fi
 
 if [ "$MARKER_LOGD" -ne 0 ]; then
     expect "FIXTURE log writer signaled"

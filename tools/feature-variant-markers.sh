@@ -1,4 +1,7 @@
 case "$FEATURE_VARIANT" in
+    OFFLINE_MODE=1)
+        MARKER_SNTP=0
+        ;;
     FEATURE_EXEC_PROBES=0)
         MARKER_PROBES=0
         ;;

@@ -77,10 +77,15 @@ CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS)
 
 # The boot tests bring their own task rules and flush the disk writer inside
 # their window. Everything else matches a normal build.
+BOOT_SNTP_SERVER ?= 127.0.0.1
+BOOT_SNTP_PORT   ?= 40123
 ifeq ($(BOOT_TEST),1)
   CFLAGS += -DCFG_LOGD_FLUSH_NS=500000000ull \
             -DCFG_STABLE_NS=500000000ull \
             -DCFG_RESTART_GRACE_NS=500000000ull \
+            -DCFG_SNTP_SERVER='"$(BOOT_SNTP_SERVER)"' \
+            -DCFG_SNTP_PORT=$(BOOT_SNTP_PORT) \
+            -DCFG_SNTP_RETRY_NS=250000000ull \
             -DINIT_TASK_RULES_H='"tests/fixtures/test_rules.h"'
   CONFIG_DEPS := config.h tests/fixtures/test_rules.h
 else
@@ -169,8 +174,8 @@ NS_ROOTFS  ?= tools/stage-rootfs.sh
 
 test-qemu:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(QEMU_BUILD) BOOT_TEST=1 \
-	        all fixtures
-	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) sh tools/run-qemu.sh
+	        BOOT_SNTP_SERVER=162.159.200.1 BOOT_SNTP_PORT=123 all fixtures
+	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
 
 # Same fixtures without an emulator: PID 1 inside a user+pid+mount namespace.
 test-ns:
@@ -223,6 +228,9 @@ test-variant:
 	fixture_extra=; \
 	if [ "$$v" = FEATURE_EXEC_PROBES=0 ]; then \
 		fixture_extra="-DFIXTURE_SETTLE_NS=25000000000ull"; \
+	fi; \
+	if [ "$$v" = FEATURE_LOG_CAPTURE=0 ]; then \
+		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1"; \
 	fi; \
 	build="build/variant-$$k"; \
 	rm -rf "$$build"; \

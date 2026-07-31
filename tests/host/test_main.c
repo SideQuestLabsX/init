@@ -508,11 +508,32 @@ static void TestSntp(void)
     memcpy(wire, &n16, sizeof(n16));
     CHECK(wire[0] == 1 && wire[1] == 2);
 
-    u64 unixNs = 1700000000ull * NS_PER_SEC + 500000000ull;
+    CHECK(SntpYearFloorSec(1970) == 0);
+    CHECK(SntpYearFloorSec(2000) == 946684800ull);
+    CHECK(SntpYearFloorSec(2025) == 1735689600ull);
+    CHECK(SntpYearFloorSec(2036) == 2082758400ull);
+
+    u64 unixNs = (SntpBuildFloorSec() + 30ull * SECS_PER_DAY) * NS_PER_SEC +
+                 500000000ull;
     u64 ntp = SntpNtpFromUnixNs(unixNs);
-    u64 back = SntpUnixNsFromNtp(ntp);
+    u64 back = SntpUnixNsFromNtp(ntp, SntpBuildFloorSec());
     CHECK(back / NS_PER_SEC == unixNs / NS_PER_SEC);
     CHECK((back % NS_PER_SEC) / 1000000 == 500);
+
+    u64 rolloverUnixSec = NTP_ERA_SECONDS - NTP_UNIX_DELTA;
+    u64 eraFloorSec = 1735689600ull; /* 2025-01-01 */
+    u64 era0Ns = (rolloverUnixSec - 1) * NS_PER_SEC;
+    u64 era1Ns = (rolloverUnixSec + 1) * NS_PER_SEC;
+    CHECK(SntpUnixNsFromNtp(SntpNtpFromUnixNs(era0Ns), eraFloorSec) == era0Ns);
+    CHECK(SntpUnixNsFromNtp(SntpNtpFromUnixNs(era1Ns), eraFloorSec) == era1Ns);
+    CHECK(SntpNtpFromUnixNs(rolloverUnixSec * NS_PER_SEC) == 0);
+    CHECK(SntpUnixNsFromNtp(0, eraFloorSec) == rolloverUnixSec * NS_PER_SEC);
+    u64 era1FloorSec = SntpYearFloorSec(2037);
+    u64 era1BuildNs = (era1FloorSec + SECS_PER_DAY) * NS_PER_SEC;
+    CHECK(SntpUnixNsFromNtp(SntpNtpFromUnixNs(era1BuildNs), era1FloorSec) ==
+          era1BuildNs);
+    CHECK(SntpCorrectForRtt(1000, 200, 400) == 1100);
+    CHECK(SntpCorrectForRtt(1000, 400, 200) == 1000);
 
     u8 req[SNTP_PKT_BYTES];
     SntpBuildRequest(req, ntp);
@@ -558,13 +579,6 @@ static void TestSntp(void)
     memset(&bad[24], 0, 8);                      /* originate does not match */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
-    memcpy(bad, reply, sizeof(bad));
-    memset(&bad[40], 0, 8);                      /* zero transmit timestamp */
-    CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
-
-    memcpy(bad, reply, sizeof(bad));
-    memset(&bad[40], 0, 4);                      /* pre-1970 seconds */
-    CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 }
 
 int main(void)

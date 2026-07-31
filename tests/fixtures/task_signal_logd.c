@@ -48,6 +48,51 @@ static i32 FindLogWriter(void)
     return -1;
 }
 
+#ifndef FIXTURE_CAPTURE_DISABLED
+static bool LogContains(const char *needle)
+{
+    isize fd = SysOpen("/var/log/init.log", O_RDONLY | O_CLOEXEC, 0);
+    if(fd < 0)
+        return false;
+
+    usize needleLen = StrLen(needle);
+    usize matched = 0;
+    char buf[256];
+    for(;;)
+    {
+        isize n = SysRead((i32)fd, buf, sizeof(buf));
+        if(n <= 0)
+            break;
+        for(isize i = 0; i < n; i++)
+        {
+            if(buf[i] == needle[matched])
+                matched++;
+            else
+                matched = buf[i] == needle[0] ? 1u : 0u;
+            if(matched == needleLen)
+            {
+                SysClose((i32)fd);
+                return true;
+            }
+        }
+    }
+
+    SysClose((i32)fd);
+    return false;
+}
+
+static bool WaitForPartialLine(void)
+{
+    for(usize attempt = 0; attempt < 12; attempt++)
+    {
+        if(LogContains("partial-stdout-line"))
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return false;
+}
+#endif
+
 void FixtureMain(void)
 {
     SysWrite(1, "partial-stdout-line", sizeof("partial-stdout-line") - 1);
@@ -55,6 +100,16 @@ void FixtureMain(void)
     /* Wait past the first boot-test flush so earlier records survive the kill */
     FixtureSleep(1500ull * NS_PER_MS);
     SysWrite(1, "\n", 1);
+
+#ifdef FIXTURE_CAPTURE_DISABLED
+    FixtureSleep(750ull * NS_PER_MS);
+#else
+    if(!WaitForPartialLine())
+    {
+        FixtureSay("FIXTURE partial line was not persisted");
+        SysExit(1);
+    }
+#endif
 
     i32 pid = FindLogWriter();
     if(pid < 0 || SysKill(pid, SIGTERM) < 0)

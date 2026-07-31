@@ -29,7 +29,7 @@ INIT_NS_RESULT="$result" \
 STAGE="$stage" \
 /usr/bin/time -f '%U %S %e' -o "$cpu" \
 strace -f -qq -s 256 \
-       -e trace=execve,socket,capset,pipe2,openat \
+       -e trace=execve,socket,connect,capset,pipe2,openat \
        -o "$trace" \
 sh tools/run-namespace.sh "$BUILD" tools/stage-feature-variant.sh
 
@@ -45,6 +45,15 @@ if [ -z "$init_line" ]; then
 fi
 init_line=${init_line%%:*}
 sed -n "${init_line},\$p" "$trace" > "$runtime_trace"
+
+if [ "$FEATURE_VARIANT" != OFFLINE_MODE=1 ]; then
+    if ! grep -Eq 'connect\(.*sin_port=htons\(40123\).*inet_addr\("127\.0\.0\.1"\).*= 0' \
+         "$runtime_trace"; then
+        echo "BAD: $FEATURE_VARIANT did not connect the local SNTP peer"
+        exit 1
+    fi
+    echo "ok: $FEATURE_VARIANT connected the local SNTP peer"
+fi
 
 reject_trace()
 {

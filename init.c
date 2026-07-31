@@ -81,6 +81,7 @@ typedef unsigned long usize;
   #define SYS_getpid          39
   #define SYS_socket          41
   #define SYS_connect         42
+  #define SYS_bind            49
   #define SYS_sendto          44
   #define SYS_recvfrom        45
   #define SYS_setsockopt      54
@@ -137,6 +138,7 @@ typedef unsigned long usize;
   #define SYS_getpid          20
   #define SYS_socket          359
   #define SYS_connect         362
+  #define SYS_bind            361
   #define SYS_sendto          369
   #define SYS_recvfrom        371
   #define SYS_setsockopt      366
@@ -202,6 +204,7 @@ typedef unsigned long usize;
   #define SYS_getpid          172
   #define SYS_socket          198
   #define SYS_connect         203
+  #define SYS_bind            200
   #define SYS_sendto          206
   #define SYS_recvfrom        207
   #define SYS_setsockopt      208
@@ -275,6 +278,7 @@ typedef unsigned long usize;
   #define SYS_getpid          20
   #define SYS_socket          281
   #define SYS_connect         283
+  #define SYS_bind            282
   #define SYS_sendto          290
   #define SYS_recvfrom        292
   #define SYS_setsockopt      294
@@ -337,6 +341,7 @@ typedef unsigned long usize;
   #define SYS_getpid          4020
   #define SYS_socket          4183
   #define SYS_connect         4170
+  #define SYS_bind            4169
   #define SYS_sendto          4180
   #define SYS_recvfrom        4176
   #define SYS_setsockopt      4181
@@ -1792,20 +1797,23 @@ bool ProcStatParse(const char *buf, usize len, ProcStat *out)
 
 #define SNTP_PKT_BYTES 48
 #define NTP_UNIX_DELTA 2208988800ull   /* seconds between 1900 and 1970 */
+#define NTP_ERA_SECONDS (1ull << 32)
 
 /* transmitNtp comes back in the server's originate field, and is what
  * SntpParseReply matches against. */
 void SntpBuildRequest(u8 pkt[SNTP_PKT_BYTES], u64 transmitNtp);
 
 /* Returns false for anything malformed: wrong mode, stratum 0 (kiss-of-death)
- * or above 15, zero transmit timestamp, or an originate field that does not
- * match the request. Every field is read byte-wise, unaligned loads being
- * unsafe on ARMv6. */
+ * or above 15, or an originate field that does not match the request. Every
+ * field is read byte-wise, unaligned loads being unsafe on ARMv6. */
 bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUnixNs);
 
 /* 64-bit NTP timestamp: 32.32 fixed point seconds since 1900 */
-u64  SntpNtpFromUnixNs(u64 unixNs);
-u64  SntpUnixNsFromNtp(u64 ntp);
+u64 SntpYearFloorSec(u64 year);
+u64 SntpBuildFloorSec(void);
+u64 SntpNtpFromUnixNs(u64 unixNs);
+u64 SntpUnixNsFromNtp(u64 ntp, u64 floorUnixSec);
+u64 SntpCorrectForRtt(u64 unixNs, u64 sentNs, u64 receivedNs);
 
 /* The sockaddr fields are the only multi-byte integers init hands to the kernel
  * in network order. The packet itself goes through Load64BE/Store64BE. */
@@ -1861,16 +1869,48 @@ u64 SntpNtpFromUnixNs(u64 unixNs)
 {
     u64 sec = unixNs / NS_PER_SEC + NTP_UNIX_DELTA;
     u64 frac = ((unixNs % NS_PER_SEC) << 32) / NS_PER_SEC;
-    return (sec << 32) | frac;
+    return ((sec & 0xffffffffull) << 32) | frac;
 }
 
-u64 SntpUnixNsFromNtp(u64 ntp)
+u64 SntpYearFloorSec(u64 year)
+{
+    u64 previousYear = year - 1;
+    u64 leapDaysBefore1970 = 1969 / 4 - 1969 / 100 + 1969 / 400;
+    u64 leapDays = previousYear / 4 - previousYear / 100 +
+                   previousYear / 400 - leapDaysBefore1970;
+    return ((year - 1970) * 365 + leapDays) * SECS_PER_DAY;
+}
+
+u64 SntpBuildFloorSec(void)
+{
+    /* __DATE__ is "Mmm dd yyyy", January 1 leaves room for clock skew */
+    const char *date = __DATE__;
+    u64 year = (u64)(date[7] - '0') * 1000 +
+               (u64)(date[8] - '0') * 100 +
+               (u64)(date[9] - '0') * 10 +
+               (u64)(date[10] - '0');
+    return SntpYearFloorSec(year);
+}
+
+u64 SntpUnixNsFromNtp(u64 ntp, u64 floorUnixSec)
 {
     u64 sec = ntp >> 32;
-    if(sec < NTP_UNIX_DELTA)
-        return 0;
+    u64 floorNtpSec = floorUnixSec + NTP_UNIX_DELTA;
+    u64 era = floorNtpSec / NTP_ERA_SECONDS;
+    if(sec < floorNtpSec % NTP_ERA_SECONDS)
+        era++;
+
+    u64 absoluteSec = era * NTP_ERA_SECONDS + sec;
     u64 frac = ntp & 0xffffffffull;
-    return (sec - NTP_UNIX_DELTA) * NS_PER_SEC + ((frac * NS_PER_SEC) >> 32);
+    return (absoluteSec - NTP_UNIX_DELTA) * NS_PER_SEC +
+           ((frac * NS_PER_SEC) >> 32);
+}
+
+u64 SntpCorrectForRtt(u64 unixNs, u64 sentNs, u64 receivedNs)
+{
+    if(receivedNs <= sentNs)
+        return unixNs;
+    return unixNs + (receivedNs - sentNs) / 2;
 }
 
 void SntpBuildRequest(u8 pkt[SNTP_PKT_BYTES], u64 transmitNtp)
@@ -1906,12 +1946,7 @@ bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUni
         return false;
 
     u64 xmit = Load64BE(&pkt[40]);
-    if(xmit == 0)
-        return false;
-    if((xmit >> 32) < NTP_UNIX_DELTA)
-        return false;
-
-    *outUnixNs = SntpUnixNsFromNtp(xmit);
+    *outUnixNs = SntpUnixNsFromNtp(xmit, SntpBuildFloorSec());
     return true;
 }
 
@@ -2268,8 +2303,14 @@ static inline isize SysPpoll(KPollFd *fds, usize n, const KTimeSpec *timeout,
 static inline isize SysSocket(i32 domain, i32 type, i32 proto)
 { return SysCall3(SYS_socket, domain, type, proto); }
 
+static inline isize SysConnect(i32 fd, const void *addr, u32 addrlen)
+{ return SysCall3(SYS_connect, fd, (isize)addr, (isize)addrlen); }
+
+static inline isize SysBind(i32 fd, const void *addr, u32 addrlen)
+{ return SysCall3(SYS_bind, fd, (isize)addr, (isize)addrlen); }
+
 static inline isize SysSendTo(i32 fd, const void *buf, usize n, i32 flags,
-                              const void *addr, u32 addrlen)
+                               const void *addr, u32 addrlen)
 { return SysCall6(SYS_sendto, fd, (isize)buf, (isize)n, flags, (isize)addr, (isize)addrlen); }
 
 static inline isize SysRecvFrom(i32 fd, void *buf, usize n, i32 flags,
@@ -2575,6 +2616,7 @@ typedef struct
     u64          sntpNextNs;
     u64          sntpDeadlineNs;
     u64          sntpXmitNtp;
+    u64          sntpSentNs;
     bool         bSntpSynced;
 
     bool         bShutdown;
@@ -3733,12 +3775,20 @@ static void SntpSend(InitState *st, u64 nowNs)
     sa.port = Hton16(CFG_SNTP_PORT);
     sa.addr = Hton32(addr);
 
+    if(SysConnect((i32)fd, &sa, (u32)sizeof(sa)) < 0)
+    {
+        SysClose((i32)fd);
+        st->sntpNextNs = nowNs + CFG_SNTP_RETRY_NS;
+        return;
+    }
+
     st->sntpXmitNtp = SntpNtpFromUnixNs(SysRealNs());
 
     u8 pkt[SNTP_PKT_BYTES];
     SntpBuildRequest(pkt, st->sntpXmitNtp);
 
-    isize sent = SysSendTo((i32)fd, pkt, sizeof(pkt), 0, &sa, (u32)sizeof(sa));
+    u64 sentNs = SysBootNs();
+    isize sent = SysSendTo((i32)fd, pkt, sizeof(pkt), 0, NULL, 0);
     if(sent != (isize)sizeof(pkt))
     {
         SysClose((i32)fd);
@@ -3747,7 +3797,8 @@ static void SntpSend(InitState *st, u64 nowNs)
     }
 
     st->sntpFd = (i32)fd;
-    st->sntpDeadlineNs = nowNs + CFG_SNTP_TIMEOUT_NS;
+    st->sntpSentNs = sentNs;
+    st->sntpDeadlineNs = sentNs + CFG_SNTP_TIMEOUT_NS;
 }
 
 void SntpTick(InitState *st, u64 nowNs)
@@ -3776,8 +3827,14 @@ void SntpHandleReply(InitState *st, u64 nowNs)
 
     u8 pkt[SNTP_PKT_BYTES * 2];
     isize n = SysRecvFrom(st->sntpFd, pkt, sizeof(pkt), 0, NULL, NULL);
-    if(n < 0)
+    if(n == -EINTR || n == -EAGAIN)
         return;
+    if(n < 0)
+    {
+        SntpClose(st);
+        st->sntpNextNs = nowNs + CFG_SNTP_RETRY_NS;
+        return;
+    }
 
     SntpClose(st);
 
@@ -3789,16 +3846,21 @@ void SntpHandleReply(InitState *st, u64 nowNs)
         return;
     }
 
+    unixNs = SntpCorrectForRtt(unixNs, st->sntpSentNs, nowNs);
+
     KTimeSpec ts;
     ts.sec = (i64)(unixNs / NS_PER_SEC);
     ts.nsec = (i64)(unixNs % NS_PER_SEC);
-    if(SysClockSetTime(CLOCK_REALTIME, &ts) < 0)
-        LogF("sntp: clock_settime rejected");
-    else
-        LogF("sntp: clock set to %llu", (u64)ts.sec);
-
-    st->bSntpSynced = true;
     st->sntpNextNs = nowNs + CFG_SNTP_POLL_NS;
+    if(SysClockSetTime(CLOCK_REALTIME, &ts) < 0)
+    {
+        LogF("sntp: clock_settime rejected");
+        st->sntpNextNs = nowNs + CFG_SNTP_RETRY_NS;
+        return;
+    }
+
+    LogF("sntp: clock set to %llu", (u64)ts.sec);
+    st->bSntpSynced = true;
     TaskRedateCal(st, nowNs);
 }
 

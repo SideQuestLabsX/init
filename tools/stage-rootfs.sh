@@ -44,6 +44,10 @@ install_bin probe_fail        tasks/always/tree.check
 install_bin task_oneshot      tasks/boot/oneshot
 install_bin task_tick         tasks/2s/tick
 
+if [ "${INIT_SNTP_FIXTURE:-1}" -ne 0 ]; then
+    install_bin task_sntp_server tasks/always/sntp_server
+fi
+
 if [ "${INIT_LOGD_FIXTURE:-1}" -ne 0 ]; then
     install_bin task_signal_logd tasks/boot/signal_logd
 fi

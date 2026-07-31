@@ -100,7 +100,11 @@ esac
 
 logd_fixture=1
 privilege_fixtures=1
+sntp_fixture=1
 case "${FEATURE_VARIANT:-}" in
+    OFFLINE_MODE=1)
+        sntp_fixture=0
+        ;;
     FEATURE_LOG_DISK=0)
         logd_fixture=0
         ;;
@@ -111,10 +115,11 @@ esac
 
 INIT_NS_ACTIVE_TIER="$ns_tier" \
 INIT_LOGD_FIXTURE=$logd_fixture \
+INIT_SNTP_FIXTURE=$sntp_fixture \
 INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((16 + logd_fixture + 2 * privilege_fixtures))
+task_count=$((16 + sntp_fixture + logd_fixture + 2 * privilege_fixtures))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
@@ -168,6 +173,7 @@ reject()
 }
 
 echo "checking markers:"
+MARKER_NAMESPACE=1
 . "${BOOT_MARKERS:-tools/boot-markers.sh}"
 
 if [ $RC -eq 124 ]; then
