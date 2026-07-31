@@ -27,7 +27,7 @@ FEATURE_VARIANT="$FEATURE_VARIANT" \
 BOOT_MARKERS=tools/feature-variant-markers.sh \
 INIT_NS_RESULT="$result" \
 STAGE="$stage" \
-/usr/bin/time -f '%U %S' -o "$cpu" \
+/usr/bin/time -f '%U %S %e' -o "$cpu" \
 strace -f -qq -s 256 \
        -e trace=execve,socket,capset,pipe2,openat \
        -o "$trace" \
@@ -68,8 +68,8 @@ case "$FEATURE_VARIANT" in
             echo "BAD: probe failure code remains in $BUILD/init"
             exit 1
         fi
-        if ! awk '($1 + $2) < 5.0 { exit 0 } { exit 1 }' "$cpu"; then
-            echo "BAD: probe-less boot used too much CPU: $(cat "$cpu")s"
+        if ! awk '(($1 + $2) * 2) < $3 { exit 0 } { exit 1 }' "$cpu"; then
+            echo "BAD: probe-less boot CPU ratio too high: $(cat "$cpu")"
             exit 1
         fi
         watchdog_bytes=$(wc -c < "$stage/dev/watchdog")
@@ -77,7 +77,7 @@ case "$FEATURE_VARIANT" in
             echo "BAD: probe-less critical task withheld watchdog pets"
             exit 1
         fi
-        echo "ok: probe-less boot CPU $(cat "$cpu")s, watchdog pets $watchdog_bytes"
+        echo "ok: probe-less boot CPU $(cat "$cpu") (user system elapsed seconds), watchdog pets $watchdog_bytes"
         ;;
     FEATURE_LOG_DISK=0)
         if [ -e "$stage/var/log/init.log" ]; then
