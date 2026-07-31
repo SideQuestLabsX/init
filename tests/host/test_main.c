@@ -41,17 +41,39 @@ static void TestStrings(void)
     CHECK(StrCopy(buf, sizeof(buf), "0123456789") == 7);
     CHECK(StrEq(buf, "0123456"));
 
+    CHECK(StrCopyOk(buf, sizeof(buf), "0123456"));
+    CHECK(!StrCopyOk(buf, sizeof(buf), "01234567"));
+    CHECK(StrCopyNOk(buf, sizeof(buf), "01234567", 7));
+    CHECK(!StrCopyNOk(buf, sizeof(buf), "01234567", 8));
+
     StrCopy(buf, sizeof(buf), "ab");
     CHECK(StrCat(buf, sizeof(buf), "cd") == 4);
     CHECK(StrEq(buf, "abcd"));
     CHECK(StrCat(buf, sizeof(buf), "efghijk") == 7);
     CHECK(StrEq(buf, "abcdefg"));
+    CHECK(!StrCatOk(buf, sizeof(buf), "x"));
 
     char path[32];
     CHECK(PathJoin(path, sizeof(path), "/tasks/always", "resolver") == 22);
     CHECK(StrEq(path, "/tasks/always/resolver"));
-    PathJoin(path, sizeof(path), "/tasks/always/", "resolver");
+    CHECK(PathJoinOk(path, sizeof(path), "/tasks/always/", "resolver"));
     CHECK(StrEq(path, "/tasks/always/resolver"));
+
+    char nameLimit[CFG_NAME_MAX + 1];
+    memset(nameLimit, 'n', CFG_NAME_MAX);
+    nameLimit[CFG_NAME_MAX] = '\0';
+    char identity[CFG_NAME_MAX];
+    CHECK(!StrCopyOk(identity, sizeof(identity), nameLimit));
+    nameLimit[CFG_NAME_MAX - 1] = '\0';
+    CHECK(StrCopyOk(identity, sizeof(identity), nameLimit));
+
+    char pathLimit[CFG_PATH_MAX];
+    memset(pathLimit, 'p', sizeof(pathLimit) - 1);
+    pathLimit[sizeof(pathLimit) - 1] = '\0';
+    char checkPath[CFG_PATH_MAX];
+    CHECK(StrCopyOk(checkPath, sizeof(checkPath), pathLimit));
+    CHECK(!StrCatOk(checkPath, sizeof(checkPath), ".check"));
+    CHECK(!PathJoinOk(checkPath, sizeof(checkPath), pathLimit, "task"));
 
     CHECK(StrStartsWith("resolver", "res"));
     CHECK(!StrStartsWith("resolver", "met"));
@@ -215,31 +237,36 @@ static void TestNumbers(void)
     CHECK(Hash64("abc", 3) != Hash64("abd", 3));
 }
 
-static void TestSort(void)
+static void TestNames(void)
 {
-    GROUP("sort");
+    GROUP("names");
 
-    /* getdents64 hands back filesystem order, so the set that survives the
-       CFG_MAX_TASKS cut has to be the same on every boot. Byte order is enough
-       for that, and position carries no meaning past it. */
-    char n0[] = "20_metrics";
-    char n1[] = "00_network";
-    char n2[] = "10_dns";
-    char n3[] = "9_early";
-    char n4[] = "zzz_noprefix";
-    char *names[] = { n0, n1, n2, n3, n4 };
+    char *names[CFG_MAX_TASKS];
+    char storage[CFG_MAX_TASKS][16];
+    usize count = 0;
 
-    SortNames(names, 5);
-    CHECK(StrEq(names[0], "00_network"));
-    CHECK(StrEq(names[1], "10_dns"));
-    CHECK(StrEq(names[2], "20_metrics"));
-    CHECK(StrEq(names[3], "9_early"));
-    CHECK(StrEq(names[4], "zzz_noprefix"));
+    for(u32 i = 0; i < CFG_MAX_TASKS + 5; i++)
+    {
+        u32 value = (i * 17u) % (CFG_MAX_TASKS + 5u);
+        char candidate[16];
+        Fmt(candidate, sizeof(candidate), "task-%02u", value);
+        NameSetInsert(names, (char *)storage, &count, CFG_MAX_TASKS,
+                      sizeof(storage[0]), candidate);
+    }
 
-    /* stable and idempotent: sorting a sorted list does not move anything */
-    SortNames(names, 5);
-    CHECK(StrEq(names[0], "00_network"));
-    CHECK(StrEq(names[4], "zzz_noprefix"));
+    CHECK(count == CFG_MAX_TASKS);
+    for(u32 i = 0; i < CFG_MAX_TASKS; i++)
+    {
+        char expected[16];
+        Fmt(expected, sizeof(expected), "task-%02u", i);
+        CHECK(StrEq(names[i], expected));
+    }
+
+    char tooLong[17];
+    memset(tooLong, 'x', sizeof(tooLong) - 1);
+    tooLong[sizeof(tooLong) - 1] = '\0';
+    CHECK(!NameSetInsert(names, (char *)storage, &count, CFG_MAX_TASKS,
+                         sizeof(storage[0]), tooLong));
 }
 
 /* ------------------------------------------------------------------- arena */
@@ -526,7 +553,7 @@ int main(void)
 {
     TestStrings();
     TestNumbers();
-    TestSort();
+    TestNames();
     TestArena();
     TestRing();
     TestRules();

@@ -46,6 +46,11 @@
 #define CFG_ARENA_BYTES     (256u * 1024u)
 #define CFG_LOG_RING_BYTES  (128u * 1024u)
 
+_Static_assert(CFG_PATH_MAX >= CFG_NAME_MAX + sizeof(CFG_TASK_DIR) + 8,
+               "CFG_PATH_MAX cannot hold a task and check path");
+_Static_assert(CFG_PATH_MAX <= 0xffffu,
+               "CFG_PATH_MAX cannot use a 16-bit name offset");
+
 /* ---- timing ----------------------------------------------------------- */
 
 /* respawn backoff: doubles from min to max, resets once a task has stayed up

@@ -737,14 +737,17 @@ bool  StrEndsWith(const char *s, const char *suffix);
 const char *StrChr(const char *s, char c);
 const char *StrRChr(const char *s, char c);
 
-/* Bounded, always NUL-terminates, returns the length written (always < cap).
- * Truncation is silent, detect it by comparing lengths. */
+/* Bounded and NUL-terminating when cap is nonzero */
 usize StrCopy(char *dst, usize cap, const char *src);
 usize StrCopyN(char *dst, usize cap, const char *src, usize n);
 usize StrCat(char *dst, usize cap, const char *src);
+bool  StrCopyOk(char *dst, usize cap, const char *src);
+bool  StrCopyNOk(char *dst, usize cap, const char *src, usize n);
+bool  StrCatOk(char *dst, usize cap, const char *src);
 
 /* "/tasks/always" + "resolver" -> "/tasks/always/resolver" */
 usize PathJoin(char *dst, usize cap, const char *dir, const char *leaf);
+bool  PathJoinOk(char *dst, usize cap, const char *dir, const char *leaf);
 
 /* Digits only, no sign. False on empty input or overflow. *end, if given, gets
  * the first unconsumed character. */
@@ -803,9 +806,8 @@ usize FmtV(char *dst, usize cap, const char *fmt, va_list ap);
 
 u64   Hash64(const void *data, usize n);
 
-/* getdents64 hands back filesystem order, so the same directory can yield a
- * different set once CFG_MAX_TASKS truncates it. Byte order fixes that. */
-void  SortNames(char **names, usize count);
+bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
+                   usize nameCap, const char *name);
 
 #ifndef INIT_HOSTED
 
@@ -964,12 +966,47 @@ usize StrCat(char *dst, usize cap, const char *src)
     return len + StrCopy(dst + len, cap - len, src);
 }
 
+bool StrCopyOk(char *dst, usize cap, const char *src)
+{
+    usize len = StrLen(src);
+    StrCopy(dst, cap, src);
+    return len < cap;
+}
+
+bool StrCopyNOk(char *dst, usize cap, const char *src, usize n)
+{
+    usize len = 0;
+    while(len < n && src[len] != '\0')
+        len++;
+    StrCopyN(dst, cap, src, n);
+    return len < cap;
+}
+
+bool StrCatOk(char *dst, usize cap, const char *src)
+{
+    usize len = StrLen(dst);
+    if(len >= cap)
+        return false;
+    return StrCopyOk(dst + len, cap - len, src);
+}
+
 usize PathJoin(char *dst, usize cap, const char *dir, const char *leaf)
 {
     usize n = StrCopy(dst, cap, dir);
     if(n > 0 && dst[n - 1] != '/')
         n = StrCat(dst, cap, "/");
     return StrCat(dst, cap, leaf);
+}
+
+bool PathJoinOk(char *dst, usize cap, const char *dir, const char *leaf)
+{
+    if(!StrCopyOk(dst, cap, dir))
+        return false;
+
+    usize len = StrLen(dst);
+    if(len > 0 && dst[len - 1] != '/' && !StrCatOk(dst, cap, "/"))
+        return false;
+    return StrCatOk(dst, cap, leaf);
 }
 
 bool ParseU64(const char *s, u64 *out, const char **end)
@@ -1341,22 +1378,43 @@ u64 Hash64(const void *data, usize n)
     return h;
 }
 
-void SortNames(char **names, usize count)
+bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
+                   usize nameCap, const char *name)
 {
-    /* insertion sort, the list is a handful of entries. Byte order, because
-       nothing downstream reads meaning into the position: the sort is here so
-       the set surviving the CFG_MAX_TASKS cut is the same on every boot. */
-    for(usize i = 1; i < count; i++)
+    if(maxEntries == 0 || nameCap == 0 || StrLen(name) >= nameCap)
+        return false;
+
+    usize lo = 0;
+    usize hi = *count;
+    while(lo < hi)
     {
-        char *key = names[i];
-        usize j = i;
-        while(j > 0 && StrCmp(names[j - 1], key) > 0)
-        {
-            names[j] = names[j - 1];
-            j--;
-        }
-        names[j] = key;
+        usize mid = lo + (hi - lo) / 2;
+        if(StrCmp(names[mid], name) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
+
+    if(*count == maxEntries && lo == maxEntries)
+        return false;
+
+    char *slot;
+    if(*count < maxEntries)
+    {
+        slot = storage + *count * nameCap;
+        (*count)++;
+    }
+    else
+    {
+        /* recycle the evicted slot so directory size cannot grow arena use */
+        slot = names[maxEntries - 1];
+    }
+
+    StrCopy(slot, nameCap, name);
+    for(usize i = *count - 1; i > lo; i--)
+        names[i] = names[i - 1];
+    names[lo] = slot;
+    return true;
 }
 
 /* ======================================================================
@@ -2435,9 +2493,8 @@ void StatusInit(StatusBlock *s);
 
 typedef struct
 {
-    char name[CFG_NAME_MAX];
     char path[CFG_PATH_MAX];
-    char checkPath[CFG_PATH_MAX];
+    u16  nameOffset;
     bool bHasCheck;
 
     u32  schedule;
@@ -2487,6 +2544,18 @@ typedef struct
     u64  lastSampleNs;
     char lastProcState;
 } Task;
+
+static const char *TaskName(const Task *t)
+{
+    return t->path + t->nameOffset;
+}
+
+#if FEATURE_EXEC_PROBES
+static bool TaskCheckPath(const Task *t, char *path, usize cap)
+{
+    return StrCopyOk(path, cap, t->path) && StrCatOk(path, cap, ".check");
+}
+#endif
 
 typedef struct
 {
@@ -2584,7 +2653,8 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
         return false;
 
     char **names = (char **)ArenaAlloc(a, maxEntries * sizeof(char *), sizeof(char *));
-    if(names == NULL)
+    char *storage = (char *)ArenaAlloc(a, maxEntries * CFG_PATH_MAX, 1);
+    if(names == NULL || storage == NULL)
     {
         SysClose((i32)fd);
         return false;
@@ -2592,6 +2662,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
 
     u8 buf[DIR_BUF_BYTES] __attribute__((aligned(8)));
     usize count = 0;
+    usize dropped = 0;
 
     for(;;)
     {
@@ -2611,19 +2682,23 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
                 continue;
             if(d->type != DT_UNKNOWN && d->type != wantType)
                 continue;
-            if(count >= maxEntries)
-                continue;
 
-            char *copy = ArenaStrDup(a, d->name);
-            if(copy == NULL)
-                break;
-            names[count++] = copy;
+            if(StrLen(d->name) >= CFG_PATH_MAX)
+            {
+                LogF("%s/%s: name too long, skipped", path, d->name);
+                continue;
+            }
+
+            if(count == maxEntries)
+                dropped++;
+            NameSetInsert(names, storage, &count, maxEntries, CFG_PATH_MAX, d->name);
         }
     }
 
     SysClose((i32)fd);
 
-    SortNames(names, count);
+    if(dropped != 0)
+        LogF("%s: %zu entries omitted after limit %zu", path, dropped, maxEntries);
     out->name = names;
     out->count = count;
     return true;
@@ -2774,7 +2849,7 @@ i32 SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t)
 
 static void TaskApplyRule(Task *t)
 {
-    const TaskRule *r = TaskRuleFind(t->name);
+    const TaskRule *r = TaskRuleFind(TaskName(t));
 
     t->uid = r != NULL ? r->uid : 0;
     t->gid = r != NULL ? r->gid : 0;
@@ -2839,7 +2914,7 @@ static void TaskRedateCal(InitState *st, u64 nowNs)
            a real step is worth a line: this runs after every poll. */
         if(moved > NS_PER_SEC)
         {
-            LogF("%s: next run in %llus after clock step", t->name,
+            LogF("%s: next run in %llus after clock step", TaskName(t),
                  (u64)((next - nowNs) / NS_PER_SEC));
         }
     }
@@ -2881,7 +2956,11 @@ void TaskScanAll(InitState *st)
         }
 
         char dirPath[CFG_PATH_MAX];
-        PathJoin(dirPath, sizeof(dirPath), CFG_TASK_DIR, dirs.name[d]);
+        if(!PathJoinOk(dirPath, sizeof(dirPath), CFG_TASK_DIR, dirs.name[d]))
+        {
+            LogF("%s/%s: schedule path too long, skipped", CFG_TASK_DIR, dirs.name[d]);
+            continue;
+        }
 
         usize inner = ArenaMark(&st->arena);
         DirList files;
@@ -2895,22 +2974,35 @@ void TaskScanAll(InitState *st)
         {
             if(StrEndsWith(files.name[f], ".check"))
                 continue;
+            if(StrLen(files.name[f]) >= CFG_NAME_MAX)
+            {
+                LogF("%s/%s: task name too long, skipped", dirPath, files.name[f]);
+                continue;
+            }
 
             Task *t = &st->task[st->taskCount];
             memset(t, 0, sizeof(*t));
-            StrCopy(t->name, sizeof(t->name), files.name[f]);
-            PathJoin(t->path, sizeof(t->path), dirPath, files.name[f]);
+            if(!PathJoinOk(t->path, sizeof(t->path), dirPath, files.name[f]))
+            {
+                LogF("%s/%s: task path too long, skipped", dirPath, files.name[f]);
+                continue;
+            }
+            t->nameOffset = (u16)(StrLen(t->path) - StrLen(files.name[f]));
 
             if(SysAccess(t->path, X_OK) < 0)
             {
-                LogF("%s: not executable, skipped", t->name);
+                LogF("%s: not executable, skipped", TaskName(t));
                 continue;
             }
 
 #if FEATURE_EXEC_PROBES
-            usize n = StrCopy(t->checkPath, sizeof(t->checkPath), t->path);
-            StrCopy(t->checkPath + n, sizeof(t->checkPath) - n, ".check");
-            t->bHasCheck = SysAccess(t->checkPath, X_OK) == 0;
+            char checkPath[CFG_PATH_MAX];
+            if(!TaskCheckPath(t, checkPath, sizeof(checkPath)))
+            {
+                LogF("%s: check path too long, skipped", TaskName(t));
+                continue;
+            }
+            t->bHasCheck = SysAccess(checkPath, X_OK) == 0;
 #endif
 
             t->schedule = schedule;
@@ -2961,7 +3053,7 @@ static void ProbeDiscard(Task *t, bool bLog)
         return;
 
     if(bLog)
-        LogF("%s: cancelling probe pid %d", t->name, t->probePid);
+        LogF("%s: cancelling probe pid %d", TaskName(t), t->probePid);
     SignalChild(t->probePid, SIGKILL);
     t->probePid = 0;
     t->bProbeKilled = false;
@@ -3000,7 +3092,7 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
         t->backoffNs = BackoffNext(t->backoffNs);
         t->nextRunNs = nowNs + t->backoffNs;
         t->state = TS_BACKOFF;
-        LogF("%s: fork failed (%d)", t->name, pid);
+        LogF("%s: fork failed (%d)", TaskName(t), pid);
         return;
     }
 
@@ -3021,7 +3113,7 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
     t->lastProbeRc = -1;
     t->nextProbeNs = nowNs + t->graceNs;
 
-    LogF("%s: started pid %d", t->name, pid);
+    LogF("%s: started pid %d", TaskName(t), pid);
 }
 
 void TaskDrain(InitState *st, Task *t)
@@ -3108,7 +3200,7 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     {
         t->state = TS_IDLE;
         if(!bClean)
-            LogF("%s: exit %d sig %d after %ums", t->name, t->lastExit, t->lastSignal,
+            LogF("%s: exit %d sig %d after %ums", TaskName(t), t->lastExit, t->lastSignal,
                  (u32)((nowNs - t->startedNs) / NS_PER_MS));
         return;
     }
@@ -3116,7 +3208,7 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     if(t->schedule == SCHED_BOOT && bClean)
     {
         t->state = TS_DONE;
-        LogF("%s: done", t->name);
+        LogF("%s: done", TaskName(t));
         return;
     }
 
@@ -3135,7 +3227,7 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     {
         t->state = TS_FAILED;
         LogF("%s: FAILED after %u consecutive failures (exit %d sig %d)",
-             t->name, t->consecFails, t->lastExit, t->lastSignal);
+             TaskName(t), t->consecFails, t->lastExit, t->lastSignal);
         return;
     }
 
@@ -3143,7 +3235,7 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     t->nextRunNs = nowNs + t->backoffNs;
     t->state = TS_BACKOFF;
     LogF("%s: exit %d sig %d, respawn in %ums",
-         t->name, t->lastExit, t->lastSignal, (u32)(t->backoffNs / NS_PER_MS));
+         TaskName(t), t->lastExit, t->lastSignal, (u32)(t->backoffNs / NS_PER_MS));
 }
 
 bool TaskReap(InitState *st, i32 pid, i32 status, u64 nowNs)
@@ -3191,7 +3283,7 @@ void TaskTick(InitState *st, u64 nowNs)
             if(t->bUnhealthyKill && t->killDeadlineNs != 0 &&
                nowNs >= t->killDeadlineNs)
             {
-                LogF("%s: restart grace expired, sending SIGKILL", t->name);
+                LogF("%s: restart grace expired, sending SIGKILL", TaskName(t));
                 SignalChild(t->pid, SIGKILL);
                 t->killDeadlineNs = 0;
             }
@@ -3204,7 +3296,7 @@ void TaskTick(InitState *st, u64 nowNs)
                 t->overruns++;
                 TaskAdvanceDeadline(t, nowNs);
                 LogF("%s: still running, interval skipped (%u total)",
-                     t->name, t->overruns);
+                     TaskName(t), t->overruns);
             }
             ProcSample(t, nowNs);
 #if FEATURE_EXEC_PROBES
@@ -3279,7 +3371,7 @@ void TaskPublish(InitState *st)
         const Task *t = &st->task[i];
         StatusEntry *e = &sb->task[i];
 
-        StrCopy(e->name, sizeof(e->name), t->name);
+        StrCopy(e->name, sizeof(e->name), TaskName(t));
         e->pid = t->pid;
         e->state = t->state;
         e->schedule = t->schedule;
@@ -3335,9 +3427,9 @@ void ProcSample(Task *t, u64 nowNs)
     if(ps.state != t->lastProcState)
     {
         if(ps.state == 'D')
-            LogF("%s: pid %d in uninterruptible sleep", t->name, t->pid);
+            LogF("%s: pid %d in uninterruptible sleep", TaskName(t), t->pid);
         else if(ps.state == 'Z')
-            LogF("%s: pid %d is a zombie", t->name, t->pid);
+            LogF("%s: pid %d is a zombie", TaskName(t), t->pid);
     }
 
     t->lastProcState = ps.state;
@@ -3356,12 +3448,12 @@ static void ProbeFailed(Task *t, u64 nowNs)
         return;
 
     t->probeFails++;
-    LogF("%s: probe failed (%d), %u/%u", t->name, t->lastProbeRc,
+    LogF("%s: probe failed (%d), %u/%u", TaskName(t), t->lastProbeRc,
          t->probeFails, (u32)CFG_PROBE_FAIL_LIMIT);
 
     if(t->probeFails >= CFG_PROBE_FAIL_LIMIT && t->pid > 0)
     {
-        LogF("%s: restarting on probe failure", t->name);
+        LogF("%s: restarting on probe failure", TaskName(t));
         t->bUnhealthyKill = true;
         t->killDeadlineNs = nowNs + CFG_RESTART_GRACE_NS;
         SignalChild(t->pid, SIGTERM);
@@ -3391,7 +3483,7 @@ void ProbeTick(InitState *st, Task *t, u64 nowNs)
         t->bProbeKilled = true;
         t->lastProbeNs = nowNs;
         t->lastProbeRc = -(i32)SIGKILL;
-        LogF("%s: probe timed out, killing pid %d", t->name, t->probePid);
+        LogF("%s: probe timed out, killing pid %d", TaskName(t), t->probePid);
         ProbeFailed(t, nowNs);
         return;
     }
@@ -3399,7 +3491,11 @@ void ProbeTick(InitState *st, Task *t, u64 nowNs)
     if(nowNs < t->nextProbeNs)
         return;
 
-    i32 pid = SpawnChild(t->checkPath, -1, -1, t);
+    char checkPath[CFG_PATH_MAX];
+    if(!TaskCheckPath(t, checkPath, sizeof(checkPath)))
+        return;
+
+    i32 pid = SpawnChild(checkPath, -1, -1, t);
     if(pid <= 0)
     {
         t->nextProbeNs = nowNs + t->probeIntervalNs;
