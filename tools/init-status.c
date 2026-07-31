@@ -4,6 +4,15 @@
 
 static StatusSnapshot G_SNAPSHOT;
 
+/* libgcc's ARM division helper requires the libc raise ABI */
+#if defined(__arm__)
+int raise(int sig)
+{
+    UNUSED(sig);
+    SysExit(70);
+}
+#endif
+
 static bool MmapFailed(const void *p)
 {
     isize value = (isize)(uintptr_t)p;
