@@ -1530,7 +1530,6 @@ typedef usize RingSeq;
 
 typedef struct
 {
-    RingSeq seq;
     u16  len;
     u8   stream;
     u8   task;
@@ -1538,15 +1537,28 @@ typedef struct
     char text[LOG_TEXT_MAX];
 } LogSlot;
 
+#define LOG_SLOT_WORDS   (LOG_SLOT_BYTES / sizeof(RingSeq))
+#define LOG_PAYLOAD_WORDS (LOG_SLOT_WORDS - 1)
+
+typedef struct
+{
+    RingSeq seq;
+    RingSeq payload[LOG_PAYLOAD_WORDS];
+} RingSlot;
+
+_Static_assert(sizeof(LogSlot) <= LOG_PAYLOAD_WORDS * sizeof(RingSeq),
+               "log payload size");
+_Static_assert(sizeof(RingSlot) == LOG_SLOT_BYTES, "log slot size");
+
 typedef struct
 {
     u32 magic;
     u32 slots;          /* power of two */
     RingSeq head;       /* monotonic, owned by init */
     RingSeq tail;       /* monotonic, owned by the writer */
-    u64 dropped;
+    RingSeq dropped;
     RingSeq control;
-    LogSlot slot[];
+    RingSlot slot[];
 } LogRing;
 
 /* bytes must be >= 2 * LOG_SLOT_BYTES. Slot count rounds down to a power of
@@ -1579,20 +1591,35 @@ bool RingInit(LogRing *r, usize bytes)
     return true;
 }
 
+static RingSeq RingReadySeq(RingSeq position)
+{
+    return position * 2 + 2;
+}
+
 static void RingPut(LogRing *r, u8 stream, u8 task, u32 flags, const char *text, usize len)
 {
     RingSeq head = __atomic_load_n(&r->head, __ATOMIC_RELAXED);
-    LogSlot *s = &r->slot[head & (r->slots - 1)];
+    RingSlot *s = &r->slot[head & (r->slots - 1)];
+    RingSeq ready = RingReadySeq(head);
 
-    s->seq = head;
-    s->len = (u16)len;
-    s->stream = stream;
-    s->task = task;
-    s->flags = flags;
-    memcpy(s->text, text, len);
-    if(len < LOG_TEXT_MAX)
-        s->text[len] = '\0';
+    LogSlot record;
+    memset(&record, 0, sizeof(record));
+    record.len = (u16)len;
+    record.stream = stream;
+    record.task = task;
+    record.flags = flags;
+    memcpy(record.text, text, len);
 
+    RingSeq payload[LOG_PAYLOAD_WORDS];
+    memset(payload, 0, sizeof(payload));
+    memcpy(payload, &record, sizeof(record));
+
+    __atomic_store_n(&s->seq, ready - 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    for(usize i = 0; i < LOG_PAYLOAD_WORDS; i++)
+        __atomic_store_n(&s->payload[i], payload[i], __ATOMIC_RELAXED);
+
+    __atomic_store_n(&s->seq, ready, __ATOMIC_RELEASE);
     __atomic_store_n(&r->head, head + 1, __ATOMIC_RELEASE);
 }
 
@@ -1623,7 +1650,7 @@ bool RingRead(LogRing *r, LogSlot *out, u64 *lost)
         return false;
 
     RingSeq head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
-    RingSeq tail = r->tail;
+    RingSeq tail = __atomic_load_n(&r->tail, __ATOMIC_RELAXED);
     if(tail == head)
         return false;
 
@@ -1633,21 +1660,30 @@ bool RingRead(LogRing *r, LogSlot *out, u64 *lost)
         RingSeq skip = (head - tail) - r->slots;
         tail += skip;
         *lost = skip;
-        r->dropped += skip;
+        __atomic_store_n(&r->tail, tail, __ATOMIC_RELEASE);
+        RingSeq dropped = __atomic_load_n(&r->dropped, __ATOMIC_RELAXED);
+        __atomic_store_n(&r->dropped, dropped + skip, __ATOMIC_RELAXED);
     }
 
-    LogSlot *s = &r->slot[tail & (r->slots - 1)];
-    memcpy(out, s, sizeof(LogSlot));
-
-    /* the writer may have overwritten this slot mid-copy */
-    head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
-    r->tail = tail + 1;
-    if(head - tail > r->slots || out->seq != tail)
-    {
-        (*lost)++;
-        r->dropped++;
+    RingSlot *s = &r->slot[tail & (r->slots - 1)];
+    RingSeq expected = RingReadySeq(tail);
+    RingSeq before = __atomic_load_n(&s->seq, __ATOMIC_ACQUIRE);
+    if(before != expected)
         return false;
-    }
+
+    RingSeq payload[LOG_PAYLOAD_WORDS];
+    for(usize i = 0; i < LOG_PAYLOAD_WORDS; i++)
+        payload[i] = __atomic_load_n(&s->payload[i], __ATOMIC_RELAXED);
+
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    RingSeq after = __atomic_load_n(&s->seq, __ATOMIC_RELAXED);
+    if(after != before)
+        return false;
+
+    memcpy(out, payload, sizeof(*out));
+    if(out->len > LOG_TEXT_MAX)
+        return false;
+    __atomic_store_n(&r->tail, tail + 1, __ATOMIC_RELEASE);
     return true;
 }
 
@@ -1656,7 +1692,8 @@ usize RingPending(const LogRing *r)
     if(r == NULL || r->magic != LOG_RING_MAGIC)
         return 0;
     RingSeq head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
-    return (usize)(head - r->tail);
+    RingSeq tail = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);
+    return (usize)(head - tail);
 }
 
 /* ======================================================================
@@ -3420,7 +3457,8 @@ void TaskPublish(InitState *st)
 
     sb->count = (u32)st->taskCount;
     sb->arenaPeak = st->arena.peak;
-    sb->logDropped = st->ring != NULL ? st->ring->dropped : 0;
+    sb->logDropped = st->ring != NULL ?
+        (u64)__atomic_load_n(&st->ring->dropped, __ATOMIC_RELAXED) : 0;
 
     for(usize i = 0; i < st->taskCount; i++)
     {
@@ -4059,21 +4097,29 @@ NORETURN void LogWriterMain(InitState *st)
     {
         u64 nowNs = SysBootNs();
         LogSlot slot;
-        u64 lost = 0;
+        u64 lostTotal = 0;
         u32 drained = 0;
 
-        while(RingRead(st->ring, &slot, &lost))
+        for(;;)
         {
+            u64 lost = 0;
+            if(!RingRead(st->ring, &slot, &lost))
+            {
+                lostTotal += lost;
+                break;
+            }
+            lostTotal += lost;
             if((slot.flags & LOG_F_DISK) != 0)
                 LogdRecord(&ls, &slot, nowNs);
             if(++drained >= 256)
                 break;
         }
 
-        if(lost > 0)
+        if(lostTotal > 0)
         {
             char line[64];
-            usize n = Fmt(line, sizeof(line), "ring overflow, %llu records dropped", lost);
+            usize n = Fmt(line, sizeof(line), "ring overflow, %llu records dropped",
+                          lostTotal);
             LogdEmitRepeats(&ls, nowNs);
             LogdAppend(&ls, line, n, nowNs);
         }

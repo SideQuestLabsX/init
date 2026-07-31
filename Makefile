@@ -130,7 +130,7 @@ HOST_SRC   := tests/host/test_main.c
 HOST_DEPS  := tests/host/test_main.c init.c $(CONFIG_DEPS)
 HOST_CFLAGS := -std=c11 -g -O1 -I. \
                -Wall -Wextra -Wshadow -Wconversion \
-               -DINIT_HOSTED=1 -fno-builtin
+               -DINIT_HOSTED=1 -fno-builtin -pthread
 
 SANITIZE ?= 1
 ifeq ($(SANITIZE),1)

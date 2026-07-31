@@ -7,6 +7,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#if !defined(_WIN32)
+  #include <pthread.h>
+#endif
 
 /* the shipped source, cut down by INIT_HOSTED. Including it keeps the tests
  * pinned to what actually ships. */
@@ -303,6 +306,135 @@ static void TestArena(void)
 static u8 G_RING_MEM[sizeof(LogRing) + TEST_RING_SLOTS * LOG_SLOT_BYTES]
     __attribute__((aligned(16)));
 
+#if !defined(_WIN32)
+
+#define RING_STRESS_WRITES 100000
+#define RING_STRESS_STALL_LIMIT 100000
+
+typedef struct
+{
+    u64 sequence;
+    u64 inverse;
+    u8 fill[32];
+} RingStressRecord;
+
+typedef struct
+{
+    LogRing *ring;
+    RingSeq bReadReady;
+    RingSeq bDone;
+    u64 seen;
+    u64 lost;
+    bool bValid;
+} RingStressState;
+
+static void *RingStressWrite(void *arg)
+{
+    RingStressState *state = (RingStressState *)arg;
+    for(u64 sequence = 1; sequence <= RING_STRESS_WRITES; sequence++)
+    {
+        RingStressRecord record;
+        record.sequence = sequence;
+        record.inverse = ~sequence;
+        memset(record.fill, (i32)(u8)sequence, sizeof(record.fill));
+
+        u8 stream = (u8)(sequence % 3);
+        u8 task = (u8)(sequence * 17);
+        u32 flags = (sequence & 1) != 0 ? LOG_F_DISK : 0;
+        RingWrite(state->ring, stream, task, flags,
+                  (const char *)&record, sizeof(record));
+        if(sequence == 64)
+            __atomic_store_n(&state->bReadReady, 1, __ATOMIC_RELEASE);
+    }
+    __atomic_store_n(&state->bDone, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+static void *RingStressRead(void *arg)
+{
+    RingStressState *state = (RingStressState *)arg;
+    while(__atomic_load_n(&state->bReadReady, __ATOMIC_ACQUIRE) == 0)
+    {
+    }
+
+    usize stalled = 0;
+    for(;;)
+    {
+        LogSlot slot;
+        u64 lost = 0;
+        if(!RingRead(state->ring, &slot, &lost))
+        {
+            state->lost += lost;
+            if(__atomic_load_n(&state->bDone, __ATOMIC_ACQUIRE) != 0)
+            {
+                if(RingPending(state->ring) == 0)
+                    break;
+                if(++stalled >= RING_STRESS_STALL_LIMIT)
+                {
+                    state->bValid = false;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        stalled = 0;
+        state->lost += lost;
+        state->seen++;
+        RingStressRecord record;
+        if(slot.len != sizeof(record))
+        {
+            state->bValid = false;
+            continue;
+        }
+        memcpy(&record, slot.text, sizeof(record));
+        if(record.inverse != ~record.sequence ||
+           slot.stream != (u8)(record.sequence % 3) ||
+           slot.task != (u8)(record.sequence * 17) ||
+           slot.flags != ((record.sequence & 1) != 0 ? LOG_F_DISK : 0))
+            state->bValid = false;
+        for(usize i = 0; i < sizeof(record.fill); i++)
+        {
+            if(record.fill[i] != (u8)record.sequence)
+                state->bValid = false;
+        }
+    }
+    return NULL;
+}
+
+static void TestRingConcurrent(void)
+{
+    static u8 stressMem[sizeof(LogRing) + 2 * LOG_SLOT_BYTES]
+        __attribute__((aligned(16)));
+    RingStressState state;
+    memset(&state, 0, sizeof(state));
+    state.ring = (LogRing *)stressMem;
+    state.bValid = true;
+
+    CHECK(RingInit(state.ring, sizeof(stressMem)));
+    pthread_t writer;
+    pthread_t reader;
+    i32 writerRc = pthread_create(&writer, NULL, RingStressWrite, &state);
+    CHECK(writerRc == 0);
+    i32 readerRc = writerRc == 0 ?
+        pthread_create(&reader, NULL, RingStressRead, &state) : -1;
+    CHECK(readerRc == 0);
+    if(writerRc == 0)
+        CHECK(pthread_join(writer, NULL) == 0);
+    if(readerRc == 0)
+        CHECK(pthread_join(reader, NULL) == 0);
+
+    if(writerRc == 0 && readerRc == 0)
+    {
+        CHECK(state.bValid);
+        CHECK(state.seen > 0);
+        CHECK(state.lost > 0);
+        CHECK(__atomic_load_n(&state.ring->dropped, __ATOMIC_RELAXED) == state.lost);
+    }
+}
+
+#endif
+
 static void TestRing(void)
 {
     GROUP("ring");
@@ -338,7 +470,7 @@ static void TestRing(void)
     while(RingRead(r, &slot, &lost))
         seen++;
     CHECK(seen == TEST_RING_SLOTS);
-    CHECK(r->dropped == 3);
+    CHECK(__atomic_load_n(&r->dropped, __ATOMIC_RELAXED) == 3);
 
     /* an oversized line splits into flagged continuations rather than truncating */
     char big[LOG_TEXT_MAX * 2 + 10];
@@ -354,6 +486,21 @@ static void TestRing(void)
     }
     CHECK(parts == 3);
     CHECK(conts == 2);
+
+    CHECK(RingInit(r, sizeof(G_RING_MEM)));
+    RingSeq wrapStart = ~(RingSeq)0 - 1;
+    __atomic_store_n(&r->head, wrapStart, __ATOMIC_RELAXED);
+    __atomic_store_n(&r->tail, wrapStart, __ATOMIC_RELAXED);
+    RingWrite(r, LOG_SRC_OUT, 0, 0, "a", 1);
+    RingWrite(r, LOG_SRC_OUT, 0, 0, "b", 1);
+    RingWrite(r, LOG_SRC_OUT, 0, 0, "c", 1);
+    CHECK(RingRead(r, &slot, &lost) && slot.text[0] == 'a');
+    CHECK(RingRead(r, &slot, &lost) && slot.text[0] == 'b');
+    CHECK(RingRead(r, &slot, &lost) && slot.text[0] == 'c');
+
+#if !defined(_WIN32)
+    TestRingConcurrent();
+#endif
 }
 
 /* ------------------------------------------------------------------- rules */
