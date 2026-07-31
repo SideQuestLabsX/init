@@ -15,6 +15,10 @@ static const TaskRule TASK_RULES[] =
 
     { .name = "oneshot", .outPolicy = LOGP_BOTH },
 
+    { .name = "stable",
+      .stableNs = 100ull * NS_PER_MS,
+      .maxRestarts = 2 },
+
     { .name = "signal_logd", .outPolicy = LOGP_BOTH },
 
     /* a check that never exits: timeouts have to count as failures on their
@@ -37,7 +41,7 @@ static const TaskRule TASK_RULES[] =
     { .name = "midprobe",
       .graceNs = 50ull * NS_PER_MS,
       .probeIntervalNs = 2ull * NS_PER_SEC,
-      .probeTimeoutNs = 2ull * NS_PER_SEC,
+      .probeTimeoutNs = 30ull * NS_PER_SEC,
       .maxRestarts = 2 },
 
     { .name = "ignoreterm",
@@ -47,6 +51,7 @@ static const TaskRule TASK_RULES[] =
       .maxRestarts = 1 },
 
     { .name = "probefail",
+      .stableNs = 500ull * NS_PER_MS,
       .graceNs = 700ull * NS_PER_MS,
       .probeIntervalNs = 50ull * NS_PER_MS,
       .probeTimeoutNs = NS_PER_SEC,

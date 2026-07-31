@@ -487,6 +487,40 @@ static void TestRing(void)
     CHECK(parts == 3);
     CHECK(conts == 2);
 
+    CHECK(RingInit(r, sizeof(G_RING_MEM)));
+    RingWrite(r, LOG_SRC_OUT, 0, 0, "bad", 3);
+    RingWrite(r, LOG_SRC_OUT, 0, 0, "next", 4);
+    LogSlot corrupt = { .len = LOG_TEXT_MAX + 1 };
+    RingSeq payload[LOG_PAYLOAD_WORDS];
+    memset(payload, 0, sizeof(payload));
+    memcpy(payload, &corrupt, sizeof(corrupt));
+    for(usize i = 0; i < LOG_PAYLOAD_WORDS; i++)
+        __atomic_store_n(&r->slot[0].payload[i], payload[i], __ATOMIC_RELAXED);
+    CHECK(!RingRead(r, &slot, &lost));
+    CHECK(lost == 1);
+    CHECK(RingPending(r) == 1);
+    CHECK(__atomic_load_n(&r->dropped, __ATOMIC_RELAXED) == 1);
+    CHECK(RingRead(r, &slot, &lost));
+    CHECK(slot.len == 4 && memcmp(slot.text, "next", 4) == 0);
+
+    CHECK(RingInit(r, sizeof(G_RING_MEM)));
+    for(u32 i = 0; i < TEST_RING_SLOTS + 2; i++)
+    {
+        char line[16];
+        usize n = Fmt(line, sizeof(line), "m%u", i);
+        RingWrite(r, LOG_SRC_OUT, 0, 0, line, n);
+    }
+    memset(payload, 0, sizeof(payload));
+    memcpy(payload, &corrupt, sizeof(corrupt));
+    RingSlot *corruptSlot = &r->slot[2 & (r->slots - 1)];
+    for(usize i = 0; i < LOG_PAYLOAD_WORDS; i++)
+        __atomic_store_n(&corruptSlot->payload[i], payload[i], __ATOMIC_RELAXED);
+    CHECK(!RingRead(r, &slot, &lost));
+    CHECK(lost == 3);
+    CHECK(__atomic_load_n(&r->dropped, __ATOMIC_RELAXED) == 3);
+    CHECK(RingRead(r, &slot, &lost));
+    CHECK(lost == 0 && StrEq(slot.text, "m3"));
+
     LogSlot same = { .len = 4, .stream = LOG_SRC_ERR, .task = 2,
                      .flags = LOG_F_DISK };
     LogIdentity identity = {0};
@@ -608,12 +642,14 @@ static void TestBackoff(void)
     CHECK(b == CFG_BACKOFF_MAX_NS);
     CHECK(BackoffNext(b) == CFG_BACKOFF_MAX_NS);
 
-    CHECK(BackoffStable(0, CFG_STABLE_NS));
-    CHECK(!BackoffStable(0, CFG_STABLE_NS - 1));
-    CHECK(!BackoffStable(100, 50));
+    CHECK(BackoffStable(0, CFG_STABLE_NS, CFG_STABLE_NS));
+    CHECK(!BackoffStable(0, CFG_STABLE_NS - 1, CFG_STABLE_NS));
+    CHECK(!BackoffStable(100, 50, CFG_STABLE_NS));
 
-    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS - 1) == 5);
-    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS) == 0);
+    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS - 1, CFG_STABLE_NS) == 5);
+    CHECK(RestartFailuresNext(4, 0, CFG_STABLE_NS, CFG_STABLE_NS) == 0);
+    CHECK(RestartFailuresNext(4, 0, 499, 500) == 5);
+    CHECK(RestartFailuresNext(4, 0, 500, 500) == 0);
 
     /* shipped probe timings put a restart past CFG_STABLE_NS, so consecFails resets */
     u64 shippedProbeFailureNs = CFG_PROBE_GRACE_NS +

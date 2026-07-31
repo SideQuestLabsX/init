@@ -81,7 +81,6 @@ BOOT_SNTP_SERVER ?= 127.0.0.1
 BOOT_SNTP_PORT   ?= 40123
 ifeq ($(BOOT_TEST),1)
   CFLAGS += -DCFG_LOGD_FLUSH_NS=2000000000ull \
-            -DCFG_STABLE_NS=500000000ull \
             -DCFG_RESTART_GRACE_NS=500000000ull \
             -DCFG_LOGD_STALL_NS=1000000000ull \
             -DCFG_SNTP_SERVER='"$(BOOT_SNTP_SERVER)"' \
@@ -102,7 +101,7 @@ LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecst
 # One translation unit; _start is the only thing that has to be assembly.
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-ns test-qemu test-variant test-variants abi-check fixtures allarch help
+.PHONY: all clean check check-all test test-config-overrides test-ns test-qemu test-variant test-variants abi-check fixtures allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -138,8 +137,12 @@ ifeq ($(SANITIZE),1)
   HOST_CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 endif
 
-test: $(HOST_BUILD)/unit
+test: test-config-overrides $(HOST_BUILD)/unit
 	@$(HOST_BUILD)/unit
+
+test-config-overrides: | $(HOST_BUILD)
+	$(HOST_CC) -std=c11 -I. -Werror -c tests/host/config_override.c \
+	           -o $(HOST_BUILD)/config_override.o
 
 $(HOST_BUILD)/unit: $(HOST_DEPS) | $(HOST_BUILD)
 	$(HOST_CC) $(HOST_CFLAGS) $(HOST_SRC) -o $@

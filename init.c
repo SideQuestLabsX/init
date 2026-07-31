@@ -1597,8 +1597,7 @@ bool RingInit(LogRing *r, usize bytes);
 
 void RingWrite(LogRing *r, u8 stream, u8 task, u32 flags, const char *text, usize len);
 
-/* False when the ring is empty. *lost gets the count of slots skipped because
- * the reader was lapped. */
+/* False when no valid record was read. *lost counts lapped or malformed slots */
 bool RingRead(LogRing *r, LogSlot *out, u64 *lost);
 
 usize RingPending(const LogRing *r);
@@ -1712,7 +1711,13 @@ bool RingRead(LogRing *r, LogSlot *out, u64 *lost)
 
     memcpy(out, payload, sizeof(*out));
     if(out->len > LOG_TEXT_MAX)
+    {
+        *lost += 1;
+        RingSeq dropped = __atomic_load_n(&r->dropped, __ATOMIC_RELAXED);
+        __atomic_store_n(&r->dropped, dropped + 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&r->tail, tail + 1, __ATOMIC_RELEASE);
         return false;
+    }
     __atomic_store_n(&r->tail, tail + 1, __ATOMIC_RELEASE);
     return true;
 }
@@ -1756,8 +1761,8 @@ const TaskRule *TaskRuleFind(const char *name)
  * fork bomb. */
 
 u64  BackoffNext(u64 currentNs);
-bool BackoffStable(u64 startedNs, u64 exitedNs);
-u32  RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs);
+bool BackoffStable(u64 startedNs, u64 exitedNs, u64 stableNs);
+u32  RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs, u64 stableNs);
 
 u64 BackoffNext(u64 currentNs)
 {
@@ -1770,16 +1775,16 @@ u64 BackoffNext(u64 currentNs)
     return next > CFG_BACKOFF_MAX_NS ? CFG_BACKOFF_MAX_NS : next;
 }
 
-bool BackoffStable(u64 startedNs, u64 exitedNs)
+bool BackoffStable(u64 startedNs, u64 exitedNs, u64 stableNs)
 {
     if(exitedNs <= startedNs)
         return false;
-    return (exitedNs - startedNs) >= CFG_STABLE_NS;
+    return (exitedNs - startedNs) >= stableNs;
 }
 
-u32 RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs)
+u32 RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs, u64 stableNs)
 {
-    return BackoffStable(startedNs, exitedNs) ? 0 : currentFails + 1;
+    return BackoffStable(startedNs, exitedNs, stableNs) ? 0 : currentFails + 1;
 }
 
 /* ======================================================================
@@ -2607,6 +2612,7 @@ typedef struct
     u64  capMask;
     bool bCritical;
     u32  maxRestarts;
+    u64  stableNs;
     u64  probeIntervalNs;
     u64  probeTimeoutNs;
     u64  graceNs;
@@ -2962,6 +2968,7 @@ static void TaskApplyRule(Task *t)
     t->bCritical = r != NULL && (r->flags & RULE_CRITICAL) != 0;
 
     t->maxRestarts = (r != NULL && r->maxRestarts != 0) ? r->maxRestarts : CFG_MAX_RESTARTS;
+    t->stableNs = (r != NULL && r->stableNs != 0) ? r->stableNs : CFG_STABLE_NS;
     t->probeIntervalNs = (r != NULL && r->probeIntervalNs != 0)
         ? r->probeIntervalNs : CFG_PROBE_INTERVAL_NS;
     t->probeTimeoutNs = (r != NULL && r->probeTimeoutNs != 0)
@@ -3340,7 +3347,8 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     }
     else
     {
-        t->consecFails = RestartFailuresNext(t->consecFails, t->startedNs, nowNs);
+        t->consecFails = RestartFailuresNext(t->consecFails, t->startedNs, nowNs,
+                                             t->stableNs);
         if(t->consecFails == 0)
             t->backoffNs = 0;
     }
@@ -3977,6 +3985,12 @@ typedef struct
     LogdChains chains;
 } LogdState;
 
+/* Room for one record, its repeat summary and a ring-loss summary */
+#define LOGD_DRAIN_RESERVE (3u * LOG_SLOT_BYTES)
+
+_Static_assert(CFG_LOGD_BUF_BYTES >= LOGD_DRAIN_RESERVE,
+               "log buffer cannot hold the drain reserve");
+
 static void LogdSleep(u64 ns)
 {
     KTimeSpec ts;
@@ -4044,9 +4058,11 @@ static bool LogdOpen(LogdState *ls)
 
 static void LogdFlush(LogdState *ls, u64 nowNs)
 {
-    ls->lastFlushNs = nowNs;
     if(ls->len == 0)
+    {
+        ls->lastFlushNs = nowNs;
         return;
+    }
 
     if(!LogdOpen(ls))
         return;
@@ -4079,6 +4095,8 @@ static void LogdFlush(LogdState *ls, u64 nowNs)
         ls->len -= off;
         ls->fileBytes += off;
     }
+    if(ls->len == 0)
+        ls->lastFlushNs = nowNs;
 }
 
 static void LogdBreakChains(LogdState *ls)
@@ -4274,12 +4292,12 @@ NORETURN void LogWriterMain(InitState *st)
 
         for(;;)
         {
-            if(sizeof(ls.buf) - ls.len < 384)
+            if(sizeof(ls.buf) - ls.len < LOGD_DRAIN_RESERVE)
             {
                 LogdBreakChains(&ls);
                 LogdEmitRepeats(&ls, nowNs);
                 LogdFlush(&ls, nowNs);
-                if(sizeof(ls.buf) - ls.len < 384)
+                if(sizeof(ls.buf) - ls.len < LOGD_DRAIN_RESERVE)
                     break;
             }
 
@@ -4291,7 +4309,11 @@ NORETURN void LogWriterMain(InitState *st)
                 LogdBreakChains(&ls);
             }
             if(!bRead)
+            {
+                if(lost > 0)
+                    continue;
                 break;
+            }
             if((slot.flags & LOG_F_DISK) != 0)
                 LogdRecord(&ls, &slot, nowNs);
             if(++drained >= 256)
@@ -4301,7 +4323,7 @@ NORETURN void LogWriterMain(InitState *st)
         if(lostTotal > 0)
         {
             char line[64];
-            usize n = Fmt(line, sizeof(line), "ring overflow, %llu records dropped",
+            usize n = Fmt(line, sizeof(line), "ring loss, %llu records dropped",
                           lostTotal);
             LogdEmitRepeats(&ls, nowNs);
             LogdAppend(&ls, line, n, NULL, nowNs);
@@ -4382,7 +4404,7 @@ void LogdCheckStall(InitState *st, u64 nowNs)
     {
         st->logdProgressSeen = progress;
         st->logdProgressSeenNs = nowNs;
-        if(BackoffStable(st->logdStartedNs, nowNs))
+        if(BackoffStable(st->logdStartedNs, nowNs, CFG_STABLE_NS))
             st->logdBackoffNs = 0;
         return;
     }
