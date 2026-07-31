@@ -19,6 +19,8 @@ static const TaskRule TASK_RULES[] =
       .stableNs = 100ull * NS_PER_MS,
       .maxRestarts = 2 },
 
+    { .name = "status-reader", .outPolicy = LOGP_BOTH },
+
     { .name = "signal_logd", .outPolicy = LOGP_BOTH },
 
     /* a check that never exits: timeouts have to count as failures on their

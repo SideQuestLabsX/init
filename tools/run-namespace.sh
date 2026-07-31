@@ -102,6 +102,8 @@ logd_fixture=1
 privilege_fixtures=1
 sntp_fixture=1
 log_symlink=${INIT_LOG_SYMLINK:-0}
+status_reader=${INIT_STATUS_READER:-0}
+status_fallback=${INIT_STATUS_FALLBACK:-0}
 case "${FEATURE_VARIANT:-}" in
     OFFLINE_MODE=1)
         sntp_fixture=0
@@ -122,12 +124,20 @@ INIT_LOGD_FIXTURE=$logd_fixture \
 INIT_SNTP_FIXTURE=$sntp_fixture \
 INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
 INIT_LOG_SYMLINK=$log_symlink \
+INIT_STATUS_READER=$status_reader \
+INIT_STATUS_FALLBACK=$status_fallback \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((20 + sntp_fixture + logd_fixture + 2 * privilege_fixtures))
+task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
+fi
+if [ "$status_reader" -ne 0 ]; then
+    MARKER_STATUS=1
+fi
+if [ "$status_fallback" -ne 0 ]; then
+    MARKER_STATUS_FALLBACK=1
 fi
 
 # No devtmpfs here, so regular files stand in for /dev/console and /dev/null
@@ -184,6 +194,11 @@ if [ "$log_symlink" -ne 0 ]; then
     MARKER_LOGFILE=0
     MARKER_CAPTURE=0
     MARKER_CHILD_ERROR=0
+fi
+
+if [ "$status_fallback" -ne 0 ] && [ -e "$STAGE/run/init.status" ]; then
+    echo "  BAD   status fallback left a file"
+    fail=1
 fi
 . "${BOOT_MARKERS:-tools/boot-markers.sh}"
 

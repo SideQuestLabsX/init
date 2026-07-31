@@ -2022,6 +2022,112 @@ bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUni
     return true;
 }
 
+/* ======================================================================
+ * status interface
+ * ====================================================================== */
+
+#define STATUS_PATH    "/run/init.status"
+#define STATUS_MAGIC   0x53544131u   /* "STA1" */
+#define STATUS_VERSION 2u
+
+#define TS_PENDING 0u   /* waiting for its first run */
+#define TS_RUNNING 1u
+#define TS_BACKOFF 2u   /* died, waiting out the respawn delay */
+#define TS_IDLE    3u   /* periodic, waiting for the next interval */
+#define TS_DONE    4u   /* boot task completed cleanly */
+#define TS_FAILED  5u   /* gave up respawning */
+
+#define STF_CRITICAL 0x1u
+#define STF_PROBED   0x2u
+
+typedef usize StatusSeq;
+
+typedef struct
+{
+    char name[CFG_NAME_MAX];
+    i32  pid;
+    u32  state;
+    u32  schedule;
+    i32  lastExit;
+    i32  lastSignal;
+    u64  lastExitNs;
+    u64  startedNs;
+    u32  runs;
+    u32  consecFails;
+    i32  lastProbeRc;
+    u32  probeFails;
+    u64  lastProbeNs;
+    u32  flags;
+    u32  pad;
+} StatusEntry;
+
+typedef struct
+{
+    u32 magic;
+    u32 version;
+    u32 count;
+    u32 entrySize;
+    u64 bootNs;
+    u64 arenaPeak;
+    u64 logDropped;
+    u64 shutdownNs;
+    StatusEntry task[CFG_MAX_TASKS];
+} StatusSnapshot;
+
+#define STATUS_PAYLOAD_WORDS (sizeof(StatusSnapshot) / sizeof(StatusSeq))
+
+_Static_assert(sizeof(StatusSnapshot) % sizeof(StatusSeq) == 0,
+               "status snapshot must fill native words");
+
+typedef struct
+{
+    StatusSeq sequence;
+    StatusSeq payload[STATUS_PAYLOAD_WORDS];
+} StatusBlock;
+
+#if defined(INIT_HOSTED) || !defined(INIT_FIXTURE)
+static void StatusPublish(StatusBlock *status, const StatusSnapshot *snapshot)
+{
+    StatusSeq sequence = __atomic_load_n(&status->sequence, __ATOMIC_RELAXED);
+    if((sequence & 1u) != 0)
+        sequence++;
+
+    __atomic_store_n(&status->sequence, sequence + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    for(usize i = 0; i < STATUS_PAYLOAD_WORDS; i++)
+    {
+        StatusSeq word;
+        memcpy(&word, (const u8 *)snapshot + i * sizeof(word), sizeof(word));
+        __atomic_store_n(&status->payload[i], word, __ATOMIC_RELAXED);
+    }
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&status->sequence, sequence + 2, __ATOMIC_RELAXED);
+}
+#endif
+
+#if defined(INIT_HOSTED) || defined(INIT_STATUS_READER)
+static bool StatusRead(const StatusBlock *status, StatusSnapshot *snapshot,
+                       StatusSeq *sequenceOut)
+{
+    StatusSeq before = __atomic_load_n(&status->sequence, __ATOMIC_ACQUIRE);
+    if((before & 1u) != 0)
+        return false;
+
+    for(usize i = 0; i < STATUS_PAYLOAD_WORDS; i++)
+    {
+        StatusSeq word = __atomic_load_n(&status->payload[i], __ATOMIC_RELAXED);
+        memcpy((u8 *)snapshot + i * sizeof(word), &word, sizeof(word));
+    }
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    StatusSeq after = __atomic_load_n(&status->sequence, __ATOMIC_RELAXED);
+    if(before != after || (after & 1u) != 0)
+        return false;
+
+    *sequenceOut = after;
+    return true;
+}
+#endif
+
 #if !defined(INIT_HOSTED)
 
 /* ======================================================================
@@ -2530,61 +2636,7 @@ void LogFlushPartial(LineBuf *lb, u8 stream, u8 task, u8 policy)
     }
 }
 
-/* ======================================================================
- * status block
- * ====================================================================== */
-
-/* Written by init, readable by an inheriting tool or a debugger attached to
- * PID 1. "Killed by SIGSEGV, 40 restarts in 2 minutes" diagnoses most failures
- * with no log pipeline at all. */
-
-#define STATUS_MAGIC   0x53544131u   /* "STA1" */
-#define STATUS_VERSION 1u
-
-#define TS_PENDING 0u   /* waiting for its first run */
-#define TS_RUNNING 1u
-#define TS_BACKOFF 2u   /* died, waiting out the respawn delay */
-#define TS_IDLE    3u   /* periodic, waiting for the next interval */
-#define TS_DONE    4u   /* once, completed cleanly */
-#define TS_FAILED  5u   /* gave up respawning */
-
-#define STF_CRITICAL 0x1u
-#define STF_PROBED   0x2u
-
-typedef struct
-{
-    char name[CFG_NAME_MAX];
-    i32  pid;
-    u32  state;
-    u32  schedule;
-    i32  lastExit;
-    i32  lastSignal;
-    u64  lastExitNs;
-    u64  startedNs;
-    u32  runs;
-    u32  consecFails;
-    i32  lastProbeRc;
-    u32  probeFails;
-    u64  lastProbeNs;
-    u64  heartbeat;      /* written by tasks that opt in */
-    u32  flags;
-    u32  pad;
-} StatusEntry;
-
-typedef struct
-{
-    u32 magic;
-    u32 version;
-    u32 count;
-    u32 entrySize;
-    u64 bootNs;
-    u64 arenaPeak;
-    u64 logDropped;
-    u64 shutdownNs;
-    StatusEntry task[CFG_MAX_TASKS];
-} StatusBlock;
-
-void StatusInit(StatusBlock *s);
+void StatusInit(StatusBlock *status, StatusSnapshot *snapshot);
 
 /* ======================================================================
  * state
@@ -2668,6 +2720,7 @@ typedef struct
     Arena        arena;
     LogRing     *ring;
     StatusBlock *status;
+    StatusSnapshot statusSnapshot;
 
     Task         task[CFG_MAX_TASKS];
     usize        taskCount;
@@ -2692,6 +2745,7 @@ typedef struct
 
     bool         bShutdown;
     bool         bKillSent;
+    u64          shutdownNs;
     u64          shutdownDeadlineNs;
     u32          shutdownCmd;
 } InitState;
@@ -3492,15 +3546,17 @@ void TaskPublish(InitState *st)
     if(sb == NULL)
         return;
 
-    sb->count = (u32)st->taskCount;
-    sb->arenaPeak = st->arena.peak;
-    sb->logDropped = st->ring != NULL ?
+    StatusSnapshot *snapshot = &st->statusSnapshot;
+    snapshot->count = (u32)st->taskCount;
+    snapshot->arenaPeak = st->arena.peak;
+    snapshot->logDropped = st->ring != NULL ?
         (u64)__atomic_load_n(&st->ring->dropped, __ATOMIC_RELAXED) : 0;
+    snapshot->shutdownNs = st->shutdownNs;
 
     for(usize i = 0; i < st->taskCount; i++)
     {
         const Task *t = &st->task[i];
-        StatusEntry *e = &sb->task[i];
+        StatusEntry *e = &snapshot->task[i];
 
         StrCopy(e->name, sizeof(e->name), TaskName(t));
         e->pid = t->pid;
@@ -3521,6 +3577,8 @@ void TaskPublish(InitState *st)
         if(t->bHasCheck)
             e->flags |= STF_PROBED;
     }
+
+    StatusPublish(sb, snapshot);
 }
 
 /* ======================================================================
@@ -4774,19 +4832,21 @@ static void SignalSetup(KSigSet *outUnblocked)
 
 /* ------------------------------------------------------------- early boot */
 
-static void MountOne(const char *src, const char *tgt, const char *fs, u32 flags)
+static bool MountOne(const char *src, const char *tgt, const char *fs, u32 flags)
 {
     SysMkdir(tgt, 0755);
     isize r = SysMount(src, tgt, fs, flags, NULL);
     if(r < 0 && r != -EBUSY)
         LogF("mount %s on %s failed (%d)", fs, tgt, (i32)r);
+    return r >= 0 || r == -EBUSY;
 }
 
-static void MountEarly(void)
+static bool MountEarly(void)
 {
     MountOne("devtmpfs", "/dev", "devtmpfs", MS_NOSUID);
     MountOne("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC);
     MountOne("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NODEV | MS_NOEXEC);
+    return MountOne("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC);
 }
 
 static i32 OpenConsole(void)
@@ -4808,13 +4868,44 @@ static void *MapShared(usize bytes)
     return p;
 }
 
-void StatusInit(StatusBlock *s)
+static void *MapStatus(bool bRunMounted)
 {
-    memset(s, 0, sizeof(*s));
-    s->magic = STATUS_MAGIC;
-    s->version = STATUS_VERSION;
-    s->entrySize = (u32)sizeof(StatusEntry);
-    s->bootNs = SysBootNs();
+    if(bRunMounted)
+    {
+        isize fd = SysOpen(STATUS_PATH,
+                           O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
+        if(fd >= 0)
+        {
+            if(SysFtruncate((i32)fd, (i64)sizeof(StatusBlock)) >= 0)
+            {
+                void *p = SysMmap(NULL, sizeof(StatusBlock), PROT_READ | PROT_WRITE,
+                                  MAP_SHARED, (i32)fd, 0);
+                SysClose((i32)fd);
+                if(!((isize)(uintptr_t)p < 0 && (isize)(uintptr_t)p > -4096))
+                    return p;
+            }
+            else
+            {
+                SysClose((i32)fd);
+            }
+            SysUnlink(STATUS_PATH);
+        }
+    }
+    void *p = MapShared(sizeof(StatusBlock));
+    if(p != NULL)
+        LogF("status: using anonymous fallback");
+    return p;
+}
+
+void StatusInit(StatusBlock *status, StatusSnapshot *snapshot)
+{
+    memset(status, 0, sizeof(*status));
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->magic = STATUS_MAGIC;
+    snapshot->version = STATUS_VERSION;
+    snapshot->entrySize = (u32)sizeof(StatusEntry);
+    snapshot->bootNs = SysBootNs();
+    StatusPublish(status, snapshot);
 }
 
 /* --------------------------------------------------------------- shutdown */
@@ -4883,18 +4974,17 @@ static void ShutdownBegin(InitState *st, i32 sig, u64 nowNs)
 {
     st->bShutdown = true;
     st->bKillSent = false;
+    st->shutdownNs = nowNs;
     st->shutdownDeadlineNs = nowNs + CFG_SHUTDOWN_GRACE_NS;
     st->shutdownCmd = (sig == SIGUSR2) ? LINUX_REBOOT_CMD_POWER_OFF
                                        : LINUX_REBOOT_CMD_RESTART;
-    if(st->status != NULL)
-        st->status->shutdownNs = nowNs;
-
     LogF("shutdown requested by signal %d", sig);
     TaskSignalAll(st, SIGTERM);
 
     /* the writer drains and flushes on this rather than dying mid-buffer */
     if(st->ring != NULL)
         __atomic_store_n(&st->ring->control, LOG_CTL_SHUTDOWN, __ATOMIC_RELEASE);
+    TaskPublish(st);
 }
 
 static NORETURN void ShutdownFinish(InitState *st)
@@ -5071,7 +5161,7 @@ void InitMain(void)
 
     SysUmask(0022);
 
-    MountEarly();
+    bool bRunMounted = MountEarly();
     st->consoleFd = OpenConsole();
 
     void *ringMem = MapShared(CFG_LOG_RING_BYTES);
@@ -5081,11 +5171,11 @@ void InitMain(void)
     LogAttach(st->ring, st->consoleFd);
     LogF("init " INIT_ARCH_NAME " starting, pid %d", (i32)SysGetPid());
 
-    void *statusMem = MapShared(sizeof(StatusBlock));
+    void *statusMem = MapStatus(bRunMounted);
     if(statusMem != NULL)
     {
         st->status = (StatusBlock *)statusMem;
-        StatusInit(st->status);
+        StatusInit(st->status, &st->statusSnapshot);
     }
 
     ArenaInit(&st->arena, G_ARENA, sizeof(G_ARENA));

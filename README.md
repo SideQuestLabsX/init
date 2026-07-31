@@ -124,6 +124,19 @@ init owns where output goes, not the tasks. Each task's `stdout` and
 does the disk writes so a stalled flash device can never block PID 1. Errors
 reach persistent storage by default, routine chatter stays in RAM.
 
+## Status
+
+init publishes a consistent task snapshot at `/run/init.status`. Build the
+freestanding reader for the target architecture and install it in the image:
+
+```sh
+make ARCH=x86_64 status-reader
+build/x86_64/init-status
+```
+
+The output includes each task's PID, state, run count, failure count and latest
+exit or probe result. The file lives on tmpfs and is recreated at boot.
+
 ## Design notes
 
 One file, [`init.c`](init.c). `start.S` holds `_start`, which cannot be written

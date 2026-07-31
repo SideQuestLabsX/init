@@ -101,7 +101,7 @@ LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecst
 # One translation unit; _start is the only thing that has to be assembly.
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-config-overrides test-ns test-qemu test-variant test-variants abi-check fixtures allarch help
+.PHONY: all clean check check-all test test-config-overrides test-ns test-qemu test-variant test-variants abi-check fixtures status-reader allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -172,6 +172,20 @@ $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
 	$(CC) $(FIXTURE_CFLAGS) $< tests/fixtures/fstart.S -o $@ \
 	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
 
+STATUS_READER := $(BUILD)/init-status
+STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
+                         -fno-stack-protector -fno-builtin -fno-common \
+                         -Wall -Wextra -I. -DINIT_FIXTURE=1 \
+                         -DINIT_STATUS_READER=1 -DFIXTURE_ENTRY=StatusReaderMain \
+                         $(CFLAGS_ARCH) \
+                         $(EXTRA_CFLAGS)
+
+status-reader: $(STATUS_READER)
+
+$(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c $(CONFIG_DEPS) | $(BUILD)
+	$(CC) $(STATUS_READER_CFLAGS) tools/init-status.c tests/fixtures/fstart.S \
+	      -o $@ -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
+
 QEMU_BUILD ?= build/$(ARCH)-qemu
 NS_BUILD   ?= build/$(ARCH)-ns
 NS_ROOTFS  ?= tools/stage-rootfs.sh
@@ -184,10 +198,12 @@ test-qemu:
 # Same fixtures without an emulator: PID 1 inside a user+pid+mount namespace.
 test-ns:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 \
-	        all fixtures
-	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) \
+	        all fixtures status-reader
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_STATUS_READER=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_LOG_SYMLINK=1 \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_STATUS_FALLBACK=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 check: test abi-check all test-ns test-qemu
@@ -221,7 +237,7 @@ check-all: check
 		fi; \
 		echo "=== check $$arch with $$cc"; \
 		$(MAKE) --no-print-directory ARCH=$$arch BUILD=build/check-$$arch \
-		        CC=$$cc abi-check all; \
+		        CC=$$cc abi-check all status-reader; \
 	done
 	@$(MAKE) --no-print-directory test-variants
 
@@ -271,6 +287,7 @@ help:
 	@echo "make test                           host unit tests"
 	@echo "make abi-check ARCH=...             verify syscall numbers"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
+	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"
 	@echo "make test-qemu ARCH=x86_64|aarch64  boot test under qemu"
 	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"
 	@echo "make test-variants                  test every disabled feature"

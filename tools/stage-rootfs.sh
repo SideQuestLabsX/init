@@ -13,10 +13,15 @@ if [ ! -x "$BUILD/init" ]; then
 fi
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/sys" "$STAGE/var/log" \
+mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/run" "$STAGE/sys" "$STAGE/var/log" \
          "$STAGE/tasks/always" "$STAGE/tasks/boot" \
          "$STAGE/tasks/2s" "$STAGE/tasks/500ms" "$STAGE/tasks/1h" "$STAGE/tasks/3d" \
          "$STAGE/tasks/1d-03-30" "$STAGE/tasks/4d-03-30" "$STAGE/tasks/sun-04-00"
+
+if [ "${INIT_STATUS_FALLBACK:-0}" -ne 0 ]; then
+    rm -rf "$STAGE/run"
+    ln -s missing-run "$STAGE/run"
+fi
 
 cp "$BUILD/init" "$STAGE/init"
 chmod 0755 "$STAGE/init"
@@ -54,6 +59,11 @@ install_bin probe_fail        tasks/always/tree.check
 install_bin task_oneshot      tasks/boot/oneshot
 install_bin task_stable       tasks/boot/stable
 install_bin task_tick         tasks/2s/tick
+
+if [ "${INIT_STATUS_READER:-0}" -ne 0 ]; then
+    cp "$BUILD/init-status" "$STAGE/tasks/500ms/status-reader"
+    chmod 0755 "$STAGE/tasks/500ms/status-reader"
+fi
 
 if [ "${INIT_SNTP_FIXTURE:-1}" -ne 0 ]; then
     install_bin task_sntp_server tasks/always/sntp_server

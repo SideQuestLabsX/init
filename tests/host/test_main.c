@@ -554,6 +554,44 @@ static void TestRing(void)
 #endif
 }
 
+/* ------------------------------------------------------------------ status */
+
+static void TestStatus(void)
+{
+    GROUP("status");
+
+    static StatusBlock status;
+    static StatusSnapshot source;
+    static StatusSnapshot copy;
+    memset(&status, 0, sizeof(status));
+    memset(&source, 0, sizeof(source));
+    memset(&copy, 0, sizeof(copy));
+
+    source.magic = STATUS_MAGIC;
+    source.version = STATUS_VERSION;
+    source.count = 1;
+    source.entrySize = sizeof(StatusEntry);
+    source.bootNs = 1234;
+    StrCopy(source.task[0].name, sizeof(source.task[0].name), "flap");
+    source.task[0].state = TS_FAILED;
+    source.task[0].runs = 3;
+    source.task[0].consecFails = 3;
+
+    StatusPublish(&status, &source);
+    StatusSeq sequence = 0;
+    CHECK(StatusRead(&status, &copy, &sequence));
+    CHECK(sequence != 0 && (sequence & 1u) == 0);
+    CHECK(copy.magic == STATUS_MAGIC && copy.version == STATUS_VERSION);
+    CHECK(copy.count == 1 && copy.entrySize == sizeof(StatusEntry));
+    CHECK(copy.bootNs == 1234);
+    CHECK(StrEq(copy.task[0].name, "flap"));
+    CHECK(copy.task[0].state == TS_FAILED);
+    CHECK(copy.task[0].runs == 3 && copy.task[0].consecFails == 3);
+
+    __atomic_store_n(&status.sequence, sequence + 1, __ATOMIC_RELAXED);
+    CHECK(!StatusRead(&status, &copy, &sequence));
+}
+
 /* ------------------------------------------------------------------- rules */
 
 static void TestRules(void)
@@ -788,6 +826,7 @@ int main(void)
     TestNames();
     TestArena();
     TestRing();
+    TestStatus();
     TestRules();
     TestSchedules();
     TestBackoff();

@@ -10,6 +10,8 @@ MARKER_PROBES="${MARKER_PROBES:-1}"
 MARKER_LOGFILE="${MARKER_LOGFILE:-1}"
 MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 MARKER_SNTP="${MARKER_SNTP:-1}"
+MARKER_STATUS="${MARKER_STATUS:-0}"
+MARKER_STATUS_FALLBACK="${MARKER_STATUS_FALLBACK:-0}"
 
 expect "init $ARCH starting, pid 1"
 expect "${EXPECT_TASKS:-21} tasks in /tasks"
@@ -33,6 +35,48 @@ reject "Kernel panic"
 if [ "$MARKER_SNTP" -ne 0 ] && [ "${MARKER_NAMESPACE:-0}" -ne 0 ]; then
     expect "FIXTURE sntp reply sent"
     expect "sntp: clock_settime rejected"
+fi
+
+if [ "$MARKER_STATUS" -ne 0 ]; then
+    if awk -v expected_tasks="$EXPECT_TASKS" '
+        index($0, "STATUS snapshot seq=") {
+            line = $0
+            sub(/^.*STATUS snapshot seq=/, "", line)
+            split(line, fields, " ")
+            sequence = fields[1]
+            bOpen = sequence ~ /^[1-9][0-9]*$/ &&
+                    sequence ~ /[02468]$/ &&
+                    fields[2] == "tasks=" expected_tasks
+            bFlap = 0
+            next
+        }
+        bOpen && index($0, "STATUS task=flap state=failed pid=0 runs=3 failures=3 exit=3 signal=0") {
+            bFlap = 1
+            next
+        }
+        bOpen && index($0, "STATUS snapshot end seq=") {
+            line = $0
+            sub(/^.*STATUS snapshot end seq=/, "", line)
+            if(bFlap && line ~ /^[1-9][0-9]*$/ &&
+               "x" line == "x" sequence) {
+                bFound = 1
+                exit
+            }
+            bOpen = 0
+        }
+        END { exit bFound ? 0 : 1 }
+    ' "$LOG"; then
+        echo "  ok    consistent status snapshot"
+    else
+        echo "  BAD   no consistent status snapshot"
+        fail=1
+    fi
+    reject "STATUS error"
+fi
+
+if [ "$MARKER_STATUS_FALLBACK" -ne 0 ]; then
+    expect "mount tmpfs on /run failed"
+    expect "status: using anonymous fallback"
 fi
 
 if [ "$MARKER_LOGD" -ne 0 ]; then
