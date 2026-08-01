@@ -1,9 +1,7 @@
-/* Dumps the persisted log before requesting shutdown */
-
 #include "fixture.h"
 
 #ifndef FIXTURE_SETTLE_NS
-  /* Covers both log-writer replacements */
+  /* Allow both log-writer replacements to finish */
   #define FIXTURE_SETTLE_NS (12ull * NS_PER_SEC)
 #endif
 

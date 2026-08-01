@@ -1,18 +1,4 @@
-/* Compile-only check of the hand-transcribed kernel ABI.
- *
- * init.c carries its own syscall numbers and flags so the freestanding build
- * pulls in no headers at all. The cost is 200-odd numbers copied by hand for
- * every target. This file pins every one to the kernel's own UAPI headers, so a
- * transcription slip is a build failure here rather than a runtime mystery on a
- * device you cannot attach a debugger to.
- *
- * One value resists this. SOCK_DGRAM lives in enum sock_type in linux/net.h,
- * which headers_install does not export, and MIPS overrides it from a header
- * that is likewise kernel-internal. Its value is transcribed from
- * arch/mips/include/asm/socket.h and is the one constant here that only the
- * boot tests can confirm.
- *
- * Kernel headers only, no libc. `make abi-check ARCH=...` builds it. */
+/* SOCK_DGRAM is absent from installed UAPI headers, MIPS runtime coverage is open */
 
 #include <asm/unistd.h>
 #include <asm/errno.h>
@@ -26,8 +12,7 @@
 #include <linux/watchdog.h>
 #include <asm/signal.h>
 
-/* Snapshot the kernel's values, then drop the macros so our own headers can
- * define the same names. */
+/* Preserve UAPI values before init.c redefines their names */
 enum
 {
     K_O_NONBLOCK  = O_NONBLOCK,
@@ -198,13 +183,9 @@ static const unsigned long long K_WDIOC_SETTIMEOUT = (unsigned long long)WDIOC_S
 #undef ELOOP
 #undef ETIMEDOUT
 
-/* INIT_ABI_ONLY stops after the constants, so none of the program itself is
- * compiled here, only what is being asserted about. */
 #include "init.c"
 
 #define SAME(ours, theirs) _Static_assert((ours) == (theirs), #ours " != " #theirs)
-
-/* ------------------------------------------------------- syscall numbers */
 
 SAME(SYS_read, __NR_read);
 SAME(SYS_write, __NR_write);
@@ -261,7 +242,7 @@ SAME(SYS_mmap2, __NR_mmap2);
 SAME(SYS_mmap, __NR_mmap);
 #endif
 
-/* 32-bit targets take the time64 clock calls, so nothing here is 2038 limited */
+/* 32-bit targets use time64 syscalls */
 #ifdef INIT_TIME32_ABI
 SAME(SYS_clock_gettime64, __NR_clock_gettime64);
 SAME(SYS_clock_settime64, __NR_clock_settime64);
@@ -272,9 +253,7 @@ SAME(SYS_clock_settime, __NR_clock_settime);
 SAME(SYS_ppoll, __NR_ppoll);
 #endif
 
-/* Independent of the above. The *32 id calls exist only where the original
- * calls took a 16-bit uid; MIPS is 32-bit but never had that problem, so it is
- * time32 without being uid32. */
+/* MIPS uses time32 but never needed uid32 syscalls */
 #ifdef INIT_UID32_ABI
 SAME(SYS_setuid, __NR_setuid32);
 SAME(SYS_setgid, __NR_setgid32);
@@ -285,11 +264,9 @@ SAME(SYS_setgid, __NR_setgid);
 SAME(SYS_setgroups, __NR_setgroups);
 #endif
 
-/* --------------------------------------------------------------- flags */
-
 SAME(O_NONBLOCK, K_O_NONBLOCK);
 SAME(O_CLOEXEC, K_O_CLOEXEC);
-SAME(O_DIRECTORY, K_O_DIRECTORY);   /* ARM32 reorders these */
+SAME(O_DIRECTORY, K_O_DIRECTORY);   /* ARM32 differs */
 SAME(O_NOFOLLOW, K_O_NOFOLLOW);
 SAME(O_CREAT, K_O_CREAT);
 SAME(O_APPEND, K_O_APPEND);
@@ -353,10 +330,7 @@ SAME(CAP_LAST_CAP, K_CAP_LAST_CAP);
 SAME(CLOCK_REALTIME, K_CLOCK_REALTIME);
 SAME(CLOCK_BOOTTIME, K_CLOCK_BOOTTIME);
 
-/* ------------------------------------------------------- runtime values */
-
-/* Too wide for an enum on 32-bit targets, so this keeps them referenced and
- * the compiler folds the comparison. */
+/* These constants exceed enum width on 32-bit targets */
 int AbiCheckWide(void);
 int AbiCheckWide(void)
 {

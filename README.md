@@ -1,152 +1,144 @@
 # init
 
-PID 1 for embedded Linux. It brings the system up, keeps your programs running,
-runs things on a schedule and shuts down without corrupting the filesystem.
+Freestanding PID 1, process supervisor and task scheduler for embedded Linux.
+The program is one C translation unit, uses raw syscalls, links no libc and
+allocates no heap.
 
-It is one C file, links no libc, and allocates no heap.
+## Setup
 
-## Why
+Build for the target, install `build/<arch>/init` as `/bin/init` and boot the
+kernel with `rdinit=/bin/init`. Put executable tasks under
+`/tasks/<schedule>/`:
 
-An appliance needs very little from PID 1: mount a few filesystems, start some
-programs, restart them when they die, run a cleanup job every night, reboot
-cleanly. systemd does that and about four hundred other things. BusyBox init
-does the first half and leaves you to script the rest.
-
-This does the whole job in something you can read in an afternoon. On a device
-you cannot attach a debugger to, that matters more than features.
-
-## How it works
-
-init runs **tasks**. A task is an executable, and the directory it sits in is
-its schedule.
-
-```
-/tasks/always/resolver        started at boot, restarted whenever it dies
-/tasks/boot/migrate           run at boot, done when it exits cleanly
-/tasks/24h/rotate_logs        run every 24 hours
-/tasks/1d-03-30/backup        run at 03:30 every day
-/tasks/sun-04-00/deepclean    run at 04:00 every Sunday
-```
-
-That is the whole model. A daemon goes in `always/`, a cleanup job goes in an
-interval directory, and both take the same path through init.
-
-Tasks that die get restarted with exponential backoff, so a crash loop cannot
-turn into a fork bomb. After enough consecutive failures init gives up on that
-task and says so, rather than spinning forever.
-
-To know whether a program is *working* rather than merely *alive*, drop an
-executable next to it:
-
-```
+```text
 /tasks/always/resolver
-/tasks/always/resolver.check     exit 0 means healthy
+/tasks/boot/migrate
+/tasks/24h/rotate_logs
+/tasks/1d-03-30/backup
+/tasks/sun-04-00/deepclean
 ```
 
-init runs the check on an interval and restarts the task if it keeps failing.
-init has no idea what the check does: a program does not have to know anything
-about init to be supervised by it.
+Tasks start concurrently. Names are sorted byte-wise to select a deterministic
+bounded set and assign stable status slots. Prefixes do not define order or
+dependencies. Each task must tolerate unavailable dependencies and retry or
+exit.
 
-Configuration is a header you edit and compile in. There is no config file at
-runtime, and nothing to be missing or half-written when the power goes.
+Tasks eligible for respawn use exponential backoff. After the configured number
+of consecutive failures, init marks the task failed and stops respawning it.
 
-## Targets
+## Schedules
 
-`x86_64`, `x86`, `aarch64`, `armv7`, `armv6`, `riscv64`, `loongarch64`, `mips`,
-`mipsel`.
+The directory below `/tasks/` defines the schedule:
 
-## Building
+| Directory | Behavior |
+|---|---|
+| `always` | Start at boot and respawn after exit |
+| `boot` | Start at boot; a clean exit is final |
+| `500ms`, `30s`, `5m`, `24h`, `7d` | Run at that interval from boot, up to 366 days; bare digits mean seconds |
+| `<N>d-HH-MM` | Run every N days at that wall-clock time |
+| `sun-HH-MM` through `sat-HH-MM` | Run at that time on the named weekday |
 
-```sh
-make ARCH=x86_64
+Intervals use boot time and keep their phase until reboot. Calendar schedules
+use `CFG_TZ_OFFSET_SEC`, with no DST handling. Missed slots and overruns are
+skipped rather than queued.
+
+A machine without a working RTC schedules calendar tasks against its current
+clock. They may run early and are re-dated after the first successful SNTP sync.
+An unsynced clock never blocks them.
+
+## Probes
+
+An optional executable sibling checks whether an `always` task is working:
+
+```text
+/tasks/always/resolver
+/tasks/always/resolver.check
 ```
 
-Any of `gcc`, `clang` or `zig cc` will do, as a compiler driver only. `make
-allarch` builds every target whose configured compiler is installed. `PIE=0`
-falls back to `-static -no-pie` where the toolchain cannot produce a working
-static-pie.
-
-## Testing
-
-```sh
-make check
-```
-
-Three tiers, each skipping cleanly when its prerequisites are absent:
-
-| Command | What it exercises | Needs |
-|---|---|---|
-| `make test` | parsers, ring buffer, arena, backoff, `/proc` parsing, SNTP packets, under ASan/UBSan | a C compiler |
-| `make test-ns` | the binary as a real PID 1 in a user+PID+mount namespace | `unshare`, unprivileged userns |
-| `make test-qemu` | the same fixtures on a real kernel, including `devtmpfs` and `reboot(2)` | qemu, a kernel image |
-| `make abi-check ARCH=…` | every hand-transcribed syscall number against the kernel's UAPI headers | that target's kernel headers |
-
-On Windows, `tools/test.ps1` runs the suite through WSL, or falls back to the
-host unit tests with a native compiler.
-
----
+Exit status 0 is healthy. Init applies a startup grace period, times out a hung
+probe and restarts the task after repeated failures. Probes run with the task's
+identity and capabilities. `/proc/PID/stat` sampling is always available for
+state diagnostics and does not require task cooperation.
 
 ## Configuration
 
-Edit [`config.h`](config.h), rebuild. Feature switches, timings, sizes, paths
-and the per-task override table are all in there, each with a comment. `PIE=0`
-on the make line is the one knob that is not.
+Edit [`config.h`](config.h) and rebuild. It contains feature switches, paths,
+limits, timing, output routes, the fixed timezone offset, SNTP settings and the
+per-task rules table. There is no runtime configuration file. `PIE=0` is the
+only make-time configuration switch outside the header.
 
-### Schedules
+## Build
 
-The directory name under `/tasks/` is the schedule:
+Supported targets:
 
-| Directory | When it runs |
+`x86_64`, `x86`, `aarch64`, `armv7`, `armv6`, `riscv64`, `loongarch64`, `mips`
+and `mipsel`.
+
+```sh
+make ARCH=x86_64
+make allarch
+```
+
+GCC, Clang and `zig cc` are supported as compiler drivers. `make allarch` builds
+targets whose configured compilers are installed. The default is static PIE,
+except MIPS; `PIE=0` selects `-static -no-pie` elsewhere.
+
+## Test
+
+```sh
+make check
+make check-all
+```
+
+| Command | Coverage | Requirements |
+|---|---|---|
+| `make test` | Parsers, arena, ring, backoff, `/proc` parsing and SNTP packets under ASan/UBSan | C compiler |
+| `make test-ns` | The binary as PID 1 in user, PID and mount namespaces | `unshare`, unprivileged user namespaces |
+| `make test-qemu` | Base boot fixtures on a real kernel, including `devtmpfs` and `reboot(2)` | QEMU and a kernel image |
+| `make abi-check ARCH=...` | Hand-transcribed syscall and ABI constants against UAPI headers | Target kernel headers |
+
+Runtime harnesses report a skip when namespace, QEMU or kernel prerequisites are
+missing. Compiler and header failures are errors. `make check-all` also runs
+feature variants, then builds and ABI-checks installed cross-toolchains.
+
+On Windows, `tools/test.ps1` runs host tests, an x86_64 build and namespace tests
+through WSL. Without WSL, it runs native host tests.
+
+CI builds and ABI-checks all nine targets. It boots x86_64 and aarch64; runtime
+coverage for the other seven remains open.
+
+## Watchdog and shutdown
+
+When enabled, init arms `CFG_WATCHDOG_DEV` and pets it only while every
+`RULE_CRITICAL` task is healthy. Closing the device leaves the watchdog armed.
+
+| Signal | Action |
 |---|---|
-| `always` | at boot, respawned whenever it dies |
-| `boot` | at boot, a clean exit is final |
-| `30s` `5m` `24h` `7d` | on that interval since boot, up to 366 days. Bare digits mean seconds |
-| `<N>d-HH-MM` | every N days at that wall-clock time |
-| `sun-HH-MM` … `sat-HH-MM` | at that time on that weekday |
-
-A trailing `-HH-MM` makes it wall clock, at the fixed offset in
-`CFG_TZ_OFFSET_SEC` with no DST handling. Without one it is an interval from
-boot, which holds its phase for the life of that boot and takes a fresh one from
-the next. Either way a slot that is missed entirely is dropped rather than
-queued.
-
-A board with no RTC boots at the epoch, so a wall-clock task fires early and is
-re-dated on the first SNTP sync. An unsynced clock never holds one back.
-
-Names are sorted byte-wise only so the same bounded task set is selected on each
-boot. Numeric prefixes have no special meaning, and tasks are forked without
-waiting. A task must tolerate a missing dependency and retry.
+| `SIGUSR2` | Clean shutdown, then power off |
+| `SIGTERM`, `SIGUSR1`, `SIGINT`, `SIGHUP` | Clean shutdown, then restart |
 
 ## Logging
 
-init owns where output goes, not the tasks. Each task's `stdout` and
-`stderr` are drained non-blocking into a shared ring buffer, and a forked child
-does the disk writes so a stalled flash device can never block PID 1. Errors
-reach persistent storage by default, routine chatter stays in RAM.
+Init drains captured task output through non-blocking pipes into a shared ring.
+A forked `init-logd` child performs batched disk writes, so PID 1 does not block
+on storage. With the shipped defaults, stderr is persisted while stdout is
+captured and discarded after transport. Per-task rules can select `drop`,
+`ring`, `disk` or `ring+disk` for either stream.
 
 ## Status
 
-init publishes a consistent task snapshot at `/run/init.status`. Build the
-freestanding reader for the target architecture and install it in the image:
+When `/run` is available, init publishes a consistent task snapshot at
+`/run/init.status`. Build and install the matching freestanding reader:
 
 ```sh
 make ARCH=x86_64 status-reader
 build/x86_64/init-status
 ```
 
-The output includes each task's PID, state, run count, failure count and latest
-exit or probe result. The file lives on tmpfs and is recreated at boot.
-
-## Design notes
-
-One file, [`init.c`](init.c). `start.S` holds `_start`, which cannot be written
-in C. The test suite compiles that same file three more times, cut down
-at section boundaries, so nothing gets tested but the shipped source.
-
-No libc, no heap, no third-party code. One static arena, sized at compile time,
-is all the memory there is. Every OS interaction is a raw syscall through inline
-assembly, and the syscall numbers are checked against the kernel's own headers
-at build time.
+The reader reports each task's PID, state, run count, failure count and latest
+exit or probe result. The tmpfs file is recreated at boot. If file mapping
+fails, init keeps an anonymous status block and continues without an external
+reader.
 
 ## License
 

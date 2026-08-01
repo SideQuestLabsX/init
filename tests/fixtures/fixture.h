@@ -1,8 +1,6 @@
 #ifndef INIT_FIXTURE_H
 #define INIT_FIXTURE_H
 
-/* INIT_FIXTURE cuts init.c down to the syscall wrappers and string helpers, so
- * the fixtures exercise the same syscall layer init does. */
 #include "init.c"
 
 /* libgcc's ARM division helper requires the libc raise ABI */
@@ -14,12 +12,6 @@ int raise(int sig)
 }
 #endif
 
-/* Helpers for the fixture tasks the boot tests supervise.
- *
- * They write to /dev/console rather than stdout, because stdout goes into the
- * shared ring by policy. The console is the out-of-band channel the harness
- * reads. */
-
 void FixtureMain(void);
 
 static inline void FixtureSay(const char *msg)
@@ -30,7 +22,7 @@ static inline void FixtureSay(const char *msg)
     isize fd = SysOpen("/dev/console", O_WRONLY | O_APPEND | O_NOCTTY, 0);
     if(fd < 0)
     {
-        /* no devtmpfs, so inherited stderr is the console (namespace harness) */
+        /* Namespace harness inherits the console on stderr */
         SysWrite(2, line, n);
         return;
     }

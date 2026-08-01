@@ -1,6 +1,3 @@
-/* A well-behaved long-running task. Emits on both pipes so the capture path
- * has something to route, then idles until init tears it down. */
-
 #include "fixture.h"
 
 void FixtureMain(void)

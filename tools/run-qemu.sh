@@ -1,13 +1,4 @@
 #!/bin/sh
-# Boot the freestanding binary as PID 1 under qemu and assert on the console
-# transcript.
-#
-# This is the half of the test suite the host unit tests cannot reach: mounting,
-# forking, reaping, backoff, probes, the shared ring, the forked disk writer and
-# the shutdown path only mean anything against a real kernel.
-#
-# Skips with a clear message when qemu or a kernel image is missing, so a
-# developer without them still gets a useful `make test`.
 set -eu
 
 ARCH="${ARCH:-x86_64}"

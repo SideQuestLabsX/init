@@ -1,19 +1,11 @@
 #!/bin/sh
-# Boot the binary as PID 1 inside a user + PID + mount namespace.
-#
-# Same fixtures and assertions as the qemu test, needing neither root, a kernel
-# image, nor an emulator, so it runs on any Linux box and gives the supervision
-# paths real coverage locally. What the namespace refuses (devtmpfs, the
-# hardware watchdog, a real SYS_reboot) stays the qemu test's job.
 set -eu
 
 ARCH="${ARCH:-x86_64}"
 BUILD="${1:-${BUILD:-build/$ARCH}}"
 ROOTFS_STAGE="${2:-${ROOTFS_STAGE:-tools/stage-rootfs.sh}}"
 TIMEOUT="${TIMEOUT:-60}"
-# Staged outside the build tree on purpose. The repo may sit on a filesystem
-# without real POSIX semantics (a Windows drive under WSL, a network share), and
-# the transcript needs O_APPEND to actually be atomic.
+# WSL-mounted Windows drives and network shares may not provide atomic O_APPEND
 STAGE="${STAGE:-${TMPDIR:-/tmp}/init-nstest}"
 LOG="$BUILD/ns-console.log"
 
@@ -51,7 +43,7 @@ unavailable()
     exit 0
 }
 
-# must reach the uid the privilege fixtures drop to
+# Privilege fixtures require UID 65534
 has_subid()
 {
     awk -F: -v user="$2" '$1 == user && $3 >= 65536 { found = 1 } END { exit !found }' \
@@ -141,8 +133,8 @@ if [ "$status_fallback" -ne 0 ]; then
     MARKER_STATUS_FALLBACK=1
 fi
 
-# No devtmpfs here, so regular files stand in for /dev/console and /dev/null
-# Console opens use O_APPEND, keeping the merged transcript ordered
+# User namespaces cannot mount devtmpfs
+# O_APPEND keeps the regular-file console transcript ordered
 : > "$STAGE/dev/console"
 chmod 0666 "$STAGE/dev/console"
 : > "$STAGE/dev/null"

@@ -1,10 +1,3 @@
-# Local test entry point for Windows.
-#
-# Prefers WSL, where the full suite runs: host unit tests, the freestanding
-# build, and the namespace boot test. Without WSL it falls back to the host unit
-# tests compiled by a native gcc/clang. The parsers and the backoff arithmetic
-# are portable C, so that much is still worth running.
-
 [CmdletBinding()]
 param(
     [switch]$UnitOnly

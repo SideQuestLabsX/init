@@ -1,7 +1,4 @@
 #!/bin/sh
-# Lay out the test root: the binary as /init, and the fixtures under /tasks in
-# the three schedule flavours. Shared by the initramfs packer and the namespace
-# harness.
 set -eu
 
 BUILD="${1:?usage: stage-rootfs.sh <build-dir> <stage-dir>}"
@@ -26,7 +23,7 @@ fi
 cp "$BUILD/init" "$STAGE/init"
 chmod 0755 "$STAGE/init"
 
-# The namespace symlink mode checks that the target stays untouched
+# Symlink mode verifies that the target stays untouched
 if [ "${INIT_LOG_SYMLINK:-0}" -ne 0 ]; then
     printf 'SENTINEL-UNTOUCHED\n' > "$STAGE/var/log/sentinel"
     ln -s sentinel "$STAGE/var/log/init.log"
@@ -84,9 +81,8 @@ if [ -n "${INIT_NS_ACTIVE_TIER:-}" ] &&
     fi
 fi
 
-# One directory per accepted spelling. Only 2s and 500ms can fire inside the
-# test window; the rest are here so a parser regression shows up as a task that
-# stopped being counted rather than as a schedule nobody noticed breaking.
+# Only 2s and 500ms may fire in the test window
+# The remaining directories cover accepted schedule spellings
 install_bin task_oneshot  tasks/500ms/subsecond
 install_bin task_oneshot  tasks/1h/hourly
 install_bin task_oneshot  tasks/3d/interval_days

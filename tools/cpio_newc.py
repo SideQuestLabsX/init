@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Pack a directory into an uncompressed newc cpio archive.
-
-Written out rather than shelling to cpio(1) so the boot test needs nothing
-beyond python3 and qemu. The kernel unpacks an uncompressed initramfs happily,
-so there is no compression step either.
-"""
+"""Pack a directory as uncompressed newc without cpio(1)."""
 
 import os
 import sys
@@ -29,15 +24,15 @@ def entry(stream, name, mode, data, ino):
         MAGIC
         + field(ino)
         + field(mode)
-        + field(0)            # uid
-        + field(0)            # gid
-        + field(1)            # nlink
-        + field(0)            # mtime
+        + field(0)  # uid
+        + field(0)  # gid
+        + field(1)  # nlink
+        + field(0)  # mtime
         + field(len(data))
-        + field(0) + field(0) # dev major/minor
-        + field(0) + field(0) # rdev major/minor
+        + field(0) + field(0)  # dev major, minor
+        + field(0) + field(0)  # rdev major, minor
         + field(len(raw))
-        + field(0)            # check
+        + field(0)  # check
     )
     stream.write(header)
     stream.write(raw)

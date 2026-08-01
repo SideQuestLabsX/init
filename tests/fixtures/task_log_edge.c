@@ -1,4 +1,4 @@
-/* Places markers across both former byte-loss boundaries */
+/* Cross both capture chunk boundaries */
 
 #include "fixture.h"
 

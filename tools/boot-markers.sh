@@ -1,8 +1,3 @@
-# Sourced by run-namespace.sh and run-qemu.sh, which define expect(), reject()
-# and $ARCH. EXPECT_TASKS is the staged task count.
-# run-namespace.sh selects the tier
-# feature-variant-markers.sh disables checks for compiled-out behavior
-
 MARKER_LOGD="${MARKER_LOGD:-1}"
 MARKER_NS_TIER="${MARKER_NS_TIER:-}"
 MARKER_CHILD_ERROR="${MARKER_CHILD_ERROR:-1}"

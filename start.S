@@ -1,8 +1,4 @@
-/* Entry point. No crt0, the kernel jumps straight here.
- *
- * Order matters. InitSelfRelocate has to run before any C code that touches a
- * relocated pointer, and the stack guard has to be seeded before the first
- * function carrying a canary. */
+/* Relocate before C and seed the guard before stack-protected calls */
 
     .section .note.GNU-stack,"",%progbits
     .text
@@ -84,8 +80,7 @@ InitSigRestore:
     .globl _start
     .type _start, @function
 _start:
-    /* gp has to be live before any relaxed gp-relative access, and setting it
-       is itself the one access that must not be relaxed */
+    /* Initialize gp before relaxed access without relaxing this sequence */
     .option push
     .option norelax
     lla     gp, __global_pointer$
@@ -98,8 +93,6 @@ _start:
     call    InitMain
     ebreak
     .size _start, .-_start
-
-/* riscv has no SA_RESTORER, the kernel supplies the return trampoline */
 
 #elif defined(__loongarch__) && __loongarch_grlen == 64
 
@@ -114,8 +107,6 @@ _start:
     bl      InitMain
     break   0
     .size _start, .-_start
-
-/* loongarch has no SA_RESTORER, the kernel supplies the return trampoline */
 
 #elif defined(__arm__)
 
@@ -149,8 +140,7 @@ InitSigRestore:
 _start:
     move    $fp, $zero
     move    $ra, $zero
-    /* an o32 caller owns the 16 bytes its callee may spill a0-a3 into, and
-       nothing below returns, so this frame is never given back */
+    /* Reserve the o32 callee argument area for a0-a3 spills */
     addiu   $sp, $sp, -32
     lui     $a0, %hi(__ehdr_start)
     addiu   $a0, $a0, %lo(__ehdr_start)
@@ -159,8 +149,6 @@ _start:
     jal     InitMain
     break
     .size _start, .-_start
-
-/* MIPS has no SA_RESTORER, the kernel supplies the return trampoline */
 
 #else
 #error "unsupported architecture"

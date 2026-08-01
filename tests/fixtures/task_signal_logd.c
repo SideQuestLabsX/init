@@ -150,7 +150,7 @@ void FixtureMain(void)
 
     FixtureSleep(750ull * NS_PER_MS);
 
-    /* SIGSTOP models a live writer making no progress */
+    /* Exercise stalled live-writer replacement */
     if(SysKill(respawned, SIGSTOP) < 0)
     {
         FixtureSay("FIXTURE log writer stop failed");

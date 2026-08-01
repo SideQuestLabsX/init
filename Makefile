@@ -1,7 +1,4 @@
-# init: freestanding PID 1 / supervisor / scheduler
-#
-# No libc, no crt0. The compiler is used as a driver only.
-# Every flag below is load-bearing; do not "clean up" this list.
+# Freestanding build without libc or crt0
 
 ARCHES  := x86_64 x86 aarch64 armv7 armv6 riscv64 loongarch64 mips mipsel
 
@@ -11,10 +8,7 @@ TARGET  := $(BUILD)/init
 
 CC      ?= gcc
 
-# -fstack-protector-strong : SNTP parses untrusted network input. Keep it.
-#                            Requires our own __stack_chk_fail/__stack_chk_guard.
-# -static-pie              : so ASLR applies to PID 1. Needs the self-relocator
-#                            in init.c; libc's crt would normally do this.
+# Every flag here is load-bearing. Stack protection uses the runtime in init.c
 CFLAGS_COMMON := \
 	-std=c11 -O2 \
 	-nostdlib -ffreestanding \
@@ -24,12 +18,9 @@ CFLAGS_COMMON := \
 	-Wall -Wextra -Wpedantic -Wshadow -Wconversion \
 	-I.
 
-# ARMv6 and ARMv7 are NOT interchangeable: ARMv6 has no movw/movt and no NEON,
-# and unaligned access is unsafe there.
-#
-# -mstack-protector-guard=global on x86: the default guard lives at %fs:0x28,
-# a TLS slot only libc sets up. Without this the canary read faults.
-# -marm on ARM: the syscall clobber list needs r7, the Thumb frame pointer.
+# ARMv6 lacks movw/movt and NEON, unaligned access is unsafe
+# x86 needs a global guard because libc never initializes TLS
+# ARM syscall assembly requires r7, reserved as the Thumb frame pointer
 ifeq ($(ARCH),x86_64)
   CFLAGS_ARCH := -m64 -mstack-protector-guard=global
 else ifeq ($(ARCH),x86)
@@ -42,13 +33,10 @@ else ifeq ($(ARCH),armv6)
   CFLAGS_ARCH := -march=armv6 -mfloat-abi=hard -mfpu=vfp -marm -fomit-frame-pointer
 else ifeq ($(ARCH),riscv64)
   CFLAGS_ARCH := -march=rv64gc -mabi=lp64d
-# -fno-jump-tables: loongarch emits switch tables as absolute addresses in
-# .rodata, which a PIE cannot relocate. Other targets build them PC-relative.
+# loongarch jump tables use unsupported absolute .rodata relocations
 else ifeq ($(ARCH),loongarch64)
   CFLAGS_ARCH := -mabi=lp64d -fno-jump-tables
-# mips32r2 is the 24Kc/74Kc baseline every router-class MIPS board of the last
-# fifteen years implements. -mno-abicalls drops the GOT and $gp convention that
-# a static freestanding binary has no use for.
+# MIPS static builds omit the unsupported GOT and $gp ABI
 else ifeq ($(ARCH),mips)
   CFLAGS_ARCH := -march=mips32r2 -mno-abicalls -fno-pic -EB
   ARCH_PIE := 0
@@ -59,9 +47,7 @@ else
   $(error Unknown ARCH '$(ARCH)'. Use: $(ARCHES))
 endif
 
-# Escape hatch for toolchains that cannot produce a working static-pie. MIPS
-# resolves position independence through the GOT, which the self-relocator in
-# init.c cannot walk, so that port defaults off.
+# MIPS defaults non-PIE because the self-relocator cannot walk its GOT
 ARCH_PIE ?= 1
 PIE ?= $(ARCH_PIE)
 ifeq ($(PIE),1)
@@ -70,13 +56,12 @@ else
   LINKMODE := -static -no-pie
 endif
 
-# Features and tunables live in config.h, not here. Edit that file.
+# Build-time policy belongs in config.h
 EXTRA_CFLAGS ?=
 
 CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS)
 
-# The boot tests bring their own task rules and flush the disk writer inside
-# their window. Everything else matches a normal build.
+# Boot tests replace task rules and shorten writer timing
 BOOT_SNTP_SERVER ?= 127.0.0.1
 BOOT_SNTP_PORT   ?= 40123
 ifeq ($(BOOT_TEST),1)
@@ -91,14 +76,9 @@ ifeq ($(BOOT_TEST),1)
 else
   CONFIG_DEPS := config.h
 endif
-# -lgcc supplies the operations the target ISA lacks: on every 32-bit target
-# `u64 / u64` lowers to __udivdi3. It is the compiler's own runtime, shipped with
-# the compiler already in use, the same category as the memcpy calls GCC emits
-# under -ffreestanding. LP64 targets never reference it and --gc-sections drops
-# it.
+# 32-bit u64 division requires libgcc's __udivdi3
 LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
-# One translation unit; _start is the only thing that has to be assembly.
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
 .PHONY: all clean check check-all test test-config-overrides test-ns test-qemu test-variant test-variants abi-check fixtures status-reader allarch help
@@ -119,11 +99,9 @@ $(BUILD)/%.o: %.S | $(BUILD)
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-# ---------------------------------------------------------------- testing
+# tests
 
-# INIT_HOSTED cuts init.c down to the half that issues no syscalls, so these
-# build and run anywhere a C compiler does, against the shipped source rather
-# than a copy of it.
+# INIT_HOSTED excludes syscall code for native sanitizer tests
 HOST_CC    ?= cc
 HOST_BUILD := build/host
 HOST_SRC   := tests/host/test_main.c
@@ -150,8 +128,7 @@ $(HOST_BUILD)/unit: $(HOST_DEPS) | $(HOST_BUILD)
 $(HOST_BUILD):
 	@mkdir -p $(HOST_BUILD)
 
-# Compile-only: static_asserts every hand-transcribed syscall number and ABI
-# constant against the kernel UAPI headers for this ARCH.
+# Pin transcribed ABI constants against target UAPI headers
 abi-check: | $(BUILD)
 	$(CC) $(CFLAGS_ARCH) -std=c11 -I. -DINIT_ABI_ONLY=1 -Wall -Wextra \
 	      -c tests/abi/abi_check.c -o $(BUILD)/abi_check.o
@@ -195,7 +172,6 @@ test-qemu:
 	        BOOT_SNTP_SERVER=162.159.200.1 BOOT_SNTP_PORT=123 all fixtures
 	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
 
-# Same fixtures without an emulator: PID 1 inside a user+pid+mount namespace.
 test-ns:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 \
 	        all fixtures status-reader
@@ -210,7 +186,6 @@ test-ns:
 
 check: test abi-check all test-ns test-qemu
 
-# CI runs the same variants as a parallel matrix
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
                     FEATURE_CAPABILITY_DROP=0

@@ -1,5 +1,4 @@
-/* Entry point for the fixture tasks. Built -static -no-pie, so unlike init
- * itself they have nothing to relocate. */
+/* Static fixture tasks need no self-relocation */
 
     .section .note.GNU-stack,"",%progbits
     .text

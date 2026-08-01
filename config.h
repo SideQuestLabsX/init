@@ -1,33 +1,27 @@
-/* Everything configurable lives here. Edit it, rebuild, done.
- *
- * init parses no configuration at runtime. It reads a directory of executables
- * and nothing else: no config file to get wrong, to go missing, to be writable
- * by something that should not be writing it.
- *
- * Included from init.c once the base types exist. */
+/* Included by init.c after its base types */
 
-/* ---- what to build ---------------------------------------------------- */
+/* features */
 
 #ifndef FEATURE_CAPABILITY_DROP
-  #define FEATURE_CAPABILITY_DROP 1   /* drop privileges before execve */
+  #define FEATURE_CAPABILITY_DROP 1
 #endif
 #ifndef FEATURE_EXEC_PROBES
-  #define FEATURE_EXEC_PROBES 1       /* <task>.check liveness probes */
+  #define FEATURE_EXEC_PROBES 1
 #endif
 #ifndef FEATURE_WATCHDOG
-  #define FEATURE_WATCHDOG 1          /* probe-gated hardware watchdog */
+  #define FEATURE_WATCHDOG 1   /* pet only while critical tasks are healthy */
 #endif
 #ifndef FEATURE_LOG_CAPTURE
-  #define FEATURE_LOG_CAPTURE 1       /* pipe capture into the shared ring */
+  #define FEATURE_LOG_CAPTURE 1
 #endif
 #ifndef FEATURE_LOG_DISK
-  #define FEATURE_LOG_DISK 1          /* forked writer, batched disk flush */
+  #define FEATURE_LOG_DISK 1
 #endif
 #ifndef OFFLINE_MODE
-  #define OFFLINE_MODE 0              /* 1 strips all networking and SNTP */
+  #define OFFLINE_MODE 0
 #endif
 
-/* ---- where things live ------------------------------------------------ */
+/* paths */
 
 #ifndef CFG_TASK_DIR
   #define CFG_TASK_DIR      "/tasks"
@@ -39,12 +33,12 @@
   #define CFG_WATCHDOG_DEV  "/dev/watchdog"
 #endif
 
-/* uid the log writer runs as. 0 keeps it root. */
+/* 0 keeps the log writer as root */
 #ifndef CFG_LOGD_UID
   #define CFG_LOGD_UID 0
 #endif
 
-/* ---- limits ----------------------------------------------------------- */
+/* limits */
 
 #ifndef CFG_PATH_MAX
   #define CFG_PATH_MAX        256
@@ -65,7 +59,6 @@
   #define CFG_ARENA_BYTES     (256u * 1024u)
 #endif
 
-/* Holds 1024 slots plus the ring header */
 #ifndef CFG_LOG_RING_BYTES
   #define CFG_LOG_RING_BYTES  (132u * 1024u)
 #endif
@@ -75,9 +68,8 @@ _Static_assert(CFG_PATH_MAX >= CFG_NAME_MAX + sizeof(CFG_TASK_DIR) + 8,
 _Static_assert(CFG_PATH_MAX <= 0xffffu,
                "CFG_PATH_MAX cannot use a 16-bit name offset");
 
-/* ---- timing ----------------------------------------------------------- */
+/* timing */
 
-/* respawn backoff doubles from min to max and resets after the stability window */
 #ifndef CFG_BACKOFF_MIN_NS
   #define CFG_BACKOFF_MIN_NS   (100ull * NS_PER_MS)
 #endif
@@ -124,10 +116,9 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
   #define CFG_LOOP_MAX_WAIT_NS  (1ull * NS_PER_SEC)
 #endif
 
-/* ---- disk logging ----------------------------------------------------- */
+/* disk logging */
 
-/* Flush on a timer measured in minutes. Erase blocks run to megabytes, so
- * frequent small appends are the worst possible pattern for flash. */
+/* Batch writes to limit flash write amplification */
 #ifndef CFG_LOGD_FLUSH_NS
   #define CFG_LOGD_FLUSH_NS (120ull * NS_PER_SEC)
 #endif
@@ -147,23 +138,20 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 _Static_assert(CFG_LOGD_BUF_BYTES <= CFG_LOGD_MAX_BYTES,
                "log buffer must fit within one rotation");
 
-/* A writer heartbeat unchanged for this long is treated as stalled */
 #ifndef CFG_LOGD_STALL_NS
   #define CFG_LOGD_STALL_NS (30ull * NS_PER_SEC)
 #endif
 
-/* ---- wall clock ------------------------------------------------------- */
+/* wall clock */
 
-/* Seconds east of UTC, applied to the wall-clock schedules. Fixed: reading tzdata
- * would mean a parser, a file dependency and a DST table, and an appliance
- * knows its own offset at image-build time. 3 * 3600 is UTC+3. */
+/* Fixed seconds east of UTC, no tzdata or DST */
 #ifndef CFG_TZ_OFFSET_SEC
   #define CFG_TZ_OFFSET_SEC 0
 #endif
 
-/* ---- time sync -------------------------------------------------------- */
+/* time sync */
 
-/* dotted quad only, init resolves no hostnames */
+/* Dotted quad only */
 #ifndef CFG_SNTP_SERVER
   #define CFG_SNTP_SERVER   "162.159.200.1"
 #endif
@@ -180,18 +168,14 @@ _Static_assert(CFG_LOGD_BUF_BYTES <= CFG_LOGD_MAX_BYTES,
   #define CFG_SNTP_TIMEOUT_NS (5ull * NS_PER_SEC)
 #endif
 
-/* ---- output routing --------------------------------------------------- */
+/* output routing */
 
-#define LOGP_INHERIT 0u   /* use the CFG_ default */
-#define LOGP_DROP    1u   /* /dev/null, no capture */
-#define LOGP_RING    2u   /* RAM only, readable through the shared ring */
-#define LOGP_DISK    4u   /* batched to the log volume */
+#define LOGP_INHERIT 0u
+#define LOGP_DROP    1u
+#define LOGP_RING    2u
+#define LOGP_DISK    4u
 #define LOGP_BOTH    (LOGP_RING | LOGP_DISK)
 
-/* Errors and crash output reach persistent storage, routine chatter does not.
- * A high-volume stream should be moved to LOGP_RING per task below: beyond the
- * write volume, anything recording user activity does not belong on flash by
- * accident. */
 #ifndef CFG_STDOUT_POLICY
   #define CFG_STDOUT_POLICY LOGP_RING
 #endif
@@ -208,42 +192,34 @@ _Static_assert(LOGP_IS_ROUTE(CFG_STDOUT_POLICY),
 _Static_assert(LOGP_IS_ROUTE(CFG_STDERR_POLICY),
                "CFG_STDERR_POLICY must be a concrete LOGP_ route");
 
-/* ---- per-task overrides ----------------------------------------------- */
+/* task overrides */
 
-#define RULE_CRITICAL 0x1u   /* failure withholds the watchdog pet */
+#define RULE_CRITICAL 0x1u   /* gates watchdog petting */
 
 #define CAP_BIT(n) (1ull << (n))
 
 typedef struct
 {
-    const char *name;            /* task filename, e.g. "dns" */
+    const char *name;
     u32  uid;                    /* 0 leaves it root */
     u32  gid;                    /* 0 with a uid set means "same as uid" */
-    u64  capMask;                /* capabilities retained across execve */
-    u32  flags;                  /* RULE_* */
+    u64  capMask;                /* retained across execve */
+    u32  flags;
     u32  maxRestarts;            /* 0 uses CFG_MAX_RESTARTS */
     u64  stableNs;               /* 0 uses CFG_STABLE_NS */
-    u64  probeIntervalNs;        /* 0 uses the CFG_PROBE_* defaults */
+    u64  probeIntervalNs;        /* 0 uses CFG_PROBE_* defaults */
     u64  probeTimeoutNs;
     u64  graceNs;
     u8   outPolicy;              /* LOGP_INHERIT uses CFG_STDOUT_POLICY */
     u8   errPolicy;              /* LOGP_INHERIT uses CFG_STDERR_POLICY */
 } TaskRule;
 
-/* Matched by name against every task, first hit wins. Tasks with no entry run
- * with the defaults above, which is most of them. NULL name terminates.
- *
- * An image build that wants its own table without forking this file can point
- * INIT_TASK_RULES_H at one; the boot tests do exactly that. */
+/* First match wins, NULL terminates, INIT_TASK_RULES_H replaces the table */
 #ifdef INIT_TASK_RULES_H
   #include INIT_TASK_RULES_H
 #else
 static const TaskRule TASK_RULES[] =
 {
-    /* CAP_BIT(10) is CAP_NET_BIND_SERVICE:
-     * { .name = "example", .uid = 65534, .gid = 65534,
-     *   .capMask = CAP_BIT(10), .flags = RULE_CRITICAL }, */
-
     { .name = NULL },
 };
 #endif

@@ -1,8 +1,4 @@
-/* A check that never exits. Stands in for one wedged on dead I/O, which is the
- * case init cannot resolve: SIGKILL does not lift a process out of
- * uninterruptible sleep. This one is killable, so it exercises the accounting
- * rather than the wedge itself. */
-
+/* Tests timeout accounting with a killable sleeper, not uninterruptible I/O */
 #include "fixture.h"
 
 void FixtureMain(void)

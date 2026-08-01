@@ -1,6 +1,3 @@
-/* Crashes immediately, every time. Exercises exponential backoff and the
- * transition to FAILED after maxRestarts. */
-
 #include "fixture.h"
 
 void FixtureMain(void)

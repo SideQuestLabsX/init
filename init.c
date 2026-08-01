@@ -1,30 +1,9 @@
-/* init: a freestanding PID 1, process supervisor and task scheduler.
- *
- * One translation unit, deliberately. The point of the binary is that you can
- * read all of it, and following a boot path across twenty files is navigation,
- * not reading. Sections run in dependency order: kernel ABI, syscall-free
- * logic, syscalls, program. `_start` is in start.S, being unexpressible in C.
- *
- * No libc, no crt0. The only headers are the four a freestanding
- * implementation has to provide.
- *
- * Three cut-down builds compile this same file, so the tests never drift from
- * what ships:
- *
- *   INIT_ABI_ONLY   kernel ABI constants alone, for tests/abi/abi_check.c
- *   INIT_HOSTED     everything syscall-free, for tests/host under ASan/UBSan
- *   INIT_FIXTURE    the above plus syscall wrappers, for the boot fixtures
- *
- */
-
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdarg.h>
 
-/* ======================================================================
- * types
- * ====================================================================== */
+/* types */
 
 typedef int8_t   i8;
 typedef uint8_t  u8;
@@ -35,7 +14,7 @@ typedef uint32_t u32;
 typedef int64_t  i64;
 typedef uint64_t u64;
 
-/* register width on both LP64 and ILP32 */
+/* Native register width on LP64 and ILP32 */
 typedef long          isize;
 typedef unsigned long usize;
 
@@ -50,17 +29,9 @@ typedef unsigned long usize;
 #define NS_PER_MS  1000000ull
 #define NS_PER_SEC 1000000000ull
 
-/* ======================================================================
- * syscall numbers
- * ====================================================================== */
+/* syscall numbers */
 
-/* Transcribed by hand so the freestanding build includes no kernel headers.
- * tests/abi/abi_check.c static_asserts every value below against <asm/unistd.h>
- * for the target arch. Build it for all five and a transcription slip is a
- * compile error rather than a runtime mystery.
- *
- * Only the openat/renameat/unlinkat/mkdirat/faccessat/dup3/pipe2/clone forms,
- * since the legacy variants are absent from the generic (arm64) table. */
+/* Pinned against target UAPI by tests/abi/abi_check.c */
 
 #if defined(__x86_64__)
 
@@ -184,9 +155,7 @@ typedef unsigned long usize;
       (defined(__riscv) && __riscv_xlen == 64) || \
       (defined(__loongarch__) && __loongarch_grlen == 64)
 
-  /* asm-generic/unistd.h table, shared verbatim by every 64-bit arch that
-   * adopted it. None of them has a legacy table to be compatible with, so the
-   * numbers are the same and only the trap instruction differs. */
+  /* Shared asm-generic 64-bit table */
   #define SYS_read            63
   #define SYS_write           64
   #define SYS_close           57
@@ -234,9 +203,7 @@ typedef unsigned long usize;
   #define SYS_openat          56
   #define SYS_mkdirat         34
   #define SYS_unlinkat        35
-  /* arm64 opts into the `renameat` ABI group and still carries 38. riscv64 and
-   * loongarch64 arrived after renameat2 superseded it and carry only that. See
-   * syscall_abis_64 in each arch's kernel/Makefile.syscalls. */
+  /* arm64 retains renameat, riscv64 and loongarch64 expose renameat2 */
   #if defined(__aarch64__)
     #define SYS_renameat      38
   #else
@@ -249,9 +216,7 @@ typedef unsigned long usize;
 
   #if defined(__aarch64__)
     #define INIT_ARCH_NAME    "aarch64"
-    /* arm64 does carry SA_RESTORER, so its struct sigaction has the extra
-     * member and omitting it would put sa_mask at the wrong offset. riscv64 and
-     * loongarch64 have no such member and take the kernel's vDSO trampoline. */
+    /* SA_RESTORER adds a field before sa_mask on arm64 */
     #define INIT_HAS_SA_RESTORER 1
   #elif defined(__riscv)
     #define INIT_ARCH_NAME    "riscv64"
@@ -261,7 +226,7 @@ typedef unsigned long usize;
 
 #elif defined(__arm__)
 
-  /* ARM EABI table (arch/arm/tools/syscall.tbl), shared by ARMv6 and ARMv7 */
+  /* ARM EABI table shared by ARMv6 and ARMv7 */
   #define SYS_read            3
   #define SYS_write           4
   #define SYS_close           6
@@ -322,9 +287,7 @@ typedef unsigned long usize;
 
 #elif defined(__mips__) && _MIPS_SIM == _ABIO32
 
-  /* o32 table (arch/mips/kernel/syscalls/syscall_o32.tbl), offset by
-   * __NR_Linux == 4000. MIPS diverges from every other port well beyond these
-   * numbers, see INIT_MIPS_ABI below. */
+  /* MIPS o32 table offset by __NR_Linux == 4000 */
   #define SYS_read            4003
   #define SYS_write           4004
   #define SYS_close           4006
@@ -383,28 +346,19 @@ typedef unsigned long usize;
     #define INIT_ARCH_NAME    "mipsel"
   #endif
 
-  /* o32 is a 32-bit ABI, so the time64 calls apply. The *32 uid calls do not:
-   * MIPS uids were 32-bit from the start and it never grew the compat set. */
+  /* o32 uses time64, but its original uid calls are already 32-bit */
   #define INIT_TIME32_ABI     1
   #define INIT_MMAP2          1
   #define INIT_MIPS_ABI       1
-  /* MIPS has no SA_RESTORER, the kernel supplies the return trampoline */
-
 #else
   #error "unsupported architecture"
 #endif
 
-/* ======================================================================
- * kernel ABI
- * ====================================================================== */
+/* kernel ABI */
 
-/* Also hand-transcribed, also asserted by tests/abi/abi_check.c.
- *
- * INIT_MIPS_ABI guards the groups where MIPS kept its pre-Linux SunOS/BSD
- * numbering instead of the values every other port shares. SIGCHLD, O_NONBLOCK,
- * MAP_ANONYMOUS and SOCK_DGRAM all mean something else there. */
+/* MIPS retains divergent signal, fcntl, mmap and socket values */
 
-/* ---- errno (returned negated) ---- */
+/* errno */
 #define EPERM     1
 #define ENOENT    2
 #define EINTR     4
@@ -428,8 +382,7 @@ typedef unsigned long usize;
 #define ESPIPE    29
 #define EROFS     30
 #define ERANGE    34
-/* above here is asm-generic/errno-base.h and shared, below is
- * asm-generic/errno.h, which MIPS replaces wholesale */
+/* MIPS replaces asm-generic/errno.h but shares errno-base.h */
 #ifdef INIT_MIPS_ABI
   #define ENOSYS    89
   #define ENOTEMPTY 93
@@ -442,7 +395,7 @@ typedef unsigned long usize;
   #define ETIMEDOUT 110
 #endif
 
-/* ---- open / fcntl ---- */
+/* open and fcntl */
 #define O_RDONLY    0
 #define O_WRONLY    1
 #define O_RDWR      2
@@ -463,10 +416,7 @@ typedef unsigned long usize;
   #define O_NONBLOCK  04000
 #endif
 
-/* Both ARM ports reorder the upper fcntl bits, arm64 included: it kept ARM32's
- * fcntl.h. At the generic values these two bits are O_DIRECT and O_LARGEFILE
- * there, so a directory open would carry O_DIRECT. Every other target, MIPS
- * included, inherits asm-generic/fcntl.h. */
+/* arm64 retains ARM32's upper fcntl bit layout */
 #if defined(__arm__) || defined(__aarch64__)
   #define O_DIRECTORY 040000
   #define O_NOFOLLOW  0100000
@@ -489,7 +439,7 @@ typedef unsigned long usize;
 #define SEEK_SET 0
 #define SEEK_END 2
 
-/* ---- mount ---- */
+/* mount */
 #define MS_RDONLY   1u
 #define MS_NOSUID   2u
 #define MS_NODEV    4u
@@ -500,7 +450,7 @@ typedef unsigned long usize;
 
 #define MNT_DETACH  2
 
-/* ---- mmap ---- */
+/* mmap */
 #define PROT_NONE   0
 #define PROT_READ   1
 #define PROT_WRITE  2
@@ -514,7 +464,7 @@ typedef unsigned long usize;
 #endif
 #define MAP_FAILED  ((void *)-1)
 
-/* ---- signals ---- */
+/* signals */
 #define SIGHUP   1
 #define SIGINT   2
 #define SIGQUIT  3
@@ -526,7 +476,6 @@ typedef unsigned long usize;
 #define SIGALRM  14
 #define SIGTERM  15
 
-/* the job-control and user signals are where MIPS parts company */
 #ifdef INIT_MIPS_ABI
   #define SIGUSR1  16
   #define SIGUSR2  17
@@ -567,8 +516,7 @@ typedef struct
     u64 bits;
 } KSigSet;
 
-/* handler and restorer are integers because ISO C has no function-pointer to
- * void * conversion, and this struct only ever crosses the syscall boundary */
+/* Integer fields preserve the kernel ABI without function-pointer conversions */
 typedef struct
 {
     usize handler;
@@ -579,7 +527,7 @@ typedef struct
     u64   mask;
 } KSigAction;
 
-/* ---- wait ---- */
+/* wait */
 #define WNOHANG   1
 #define WUNTRACED 2
 
@@ -588,7 +536,7 @@ typedef struct
 #define WIFEXITED(s)   (WTERMSIG(s) == 0)
 #define WIFSIGNALED(s) ((((s) & 0x7f) + 1) >> 1 > 0)
 
-/* ---- poll ---- */
+/* poll */
 #define POLLIN   0x0001
 #define POLLPRI  0x0002
 #define POLLOUT  0x0004
@@ -603,20 +551,19 @@ typedef struct
     i16 revents;
 } KPollFd;
 
-/* ---- time ---- */
+/* time */
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 #define CLOCK_BOOTTIME  7
 
-/* 64-bit timespec throughout: used directly on LP64, and via the *_time64
- * syscalls on 32-bit targets, so nothing here is 2038-limited */
+/* 32-bit targets pass this through *_time64 syscalls */
 typedef struct
 {
     i64 sec;
     i64 nsec;
 } KTimeSpec;
 
-/* ---- prctl ---- */
+/* prctl */
 #define PR_SET_PDEATHSIG      1
 #define PR_SET_KEEPCAPS       8
 #define PR_SET_NAME           15
@@ -626,7 +573,7 @@ typedef struct
 #define PR_CAP_AMBIENT_RAISE      2
 #define PR_CAP_AMBIENT_CLEAR_ALL  4
 
-/* ---- capabilities ---- */
+/* capabilities */
 #define LINUX_CAPABILITY_VERSION_3 0x20080522u
 #define CAP_LAST_CAP 40
 
@@ -643,14 +590,14 @@ typedef struct
     u32 inheritable;
 } KCapData;
 
-/* ---- reboot ---- */
+/* reboot */
 #define LINUX_REBOOT_MAGIC1     0xfee1deadu
 #define LINUX_REBOOT_MAGIC2     672274793u
 #define LINUX_REBOOT_CMD_RESTART   0x01234567u
 #define LINUX_REBOOT_CMD_HALT      0xcdef0123u
 #define LINUX_REBOOT_CMD_POWER_OFF 0x4321fedcu
 
-/* ---- dirent ---- */
+/* dirent */
 #define DT_UNKNOWN 0
 #define DT_DIR     4
 #define DT_REG     8
@@ -665,18 +612,16 @@ typedef struct
     char name[];
 } KDirent64;
 
-/* ---- sockets ---- */
+/* sockets */
 #define AF_INET       2
 
-/* MIPS replaces enum sock_type outright for SunOS binary compatibility, and the
- * first two entries come out swapped. Getting this wrong opens a TCP socket. */
+/* MIPS swaps the first socket types, generic value 2 would open TCP */
 #ifdef INIT_MIPS_ABI
   #define SOCK_DGRAM  1
 #else
   #define SOCK_DGRAM  2
 #endif
 
-/* the kernel spells these as the O_ bits, so they follow the fcntl block */
 #define SOCK_NONBLOCK O_NONBLOCK
 #define SOCK_CLOEXEC  O_CLOEXEC
 #define IPPROTO_UDP   17
@@ -689,10 +634,9 @@ typedef struct
     u8  pad[8];
 } KSockAddrIn;
 
-/* ---- watchdog ioctls ('W' == 0x57) ---- */
+/* watchdog ioctls */
 
-/* MIPS packs the direction field into 3 bits at 29 with its own encoding
- * (NONE 1, READ 2, WRITE 4), so _IOR lands elsewhere. _IOWR coincides. */
+/* MIPS uses a different ioctl direction encoding for _IOR */
 #ifdef INIT_MIPS_ABI
   #define WDIOC_KEEPALIVE 0x40045705u
 #else
@@ -700,30 +644,22 @@ typedef struct
 #endif
 #define WDIOC_SETTIMEOUT  0xc0045706u
 
-/* ---- getrandom ---- */
+/* getrandom */
 #define GRND_NONBLOCK 0x0001
 
 #if !defined(INIT_ABI_ONLY)
 
-/* ======================================================================
- * tunables
- * ====================================================================== */
+/* tunables */
 
-/* Everything configurable is in one header, and init reads no configuration at
- * runtime. Included here because it needs the types above. */
+/* Included after the ABI types it uses */
 #ifndef INIT_CONFIG_H
   #define INIT_CONFIG_H "config.h"
 #endif
 #include INIT_CONFIG_H
 
-/* ======================================================================
- * strings and memory
- * ====================================================================== */
+/* strings and memory */
 
-/* GCC lowers struct copies and array init to memcpy/memset calls even under
- * -ffreestanding, so those four symbols have to exist under their C names.
- * The host build takes libc's, since overriding them there fights the
- * sanitiser interceptors. */
+/* GCC emits these symbols under -ffreestanding, hosted builds use libc */
 #ifdef INIT_HOSTED
   #include <string.h>
 #else
@@ -750,20 +686,16 @@ bool  StrCopyOk(char *dst, usize cap, const char *src);
 bool  StrCopyNOk(char *dst, usize cap, const char *src, usize n);
 bool  StrCatOk(char *dst, usize cap, const char *src);
 
-/* "/tasks/always" + "resolver" -> "/tasks/always/resolver" */
 usize PathJoin(char *dst, usize cap, const char *dir, const char *leaf);
 bool  PathJoinOk(char *dst, usize cap, const char *dir, const char *leaf);
 
-/* Digits only, no sign. False on empty input or overflow. *end, if given, gets
- * the first unconsumed character. */
+/* Unsigned digits only, end receives the first unconsumed byte */
 bool ParseU64(const char *s, u64 *out, const char **end);
 
-/* "500ms" "30s" "5m" "24h" "7d" -> nanoseconds. Bare digits mean seconds. */
+/* Suffixes are ms, s, m, h and d, bare values are seconds */
 bool ParseDuration(const char *s, u64 *outNs);
 
-/* Wall-clock schedules. Everything below comes out of unixSec / 86400, which is
- * why day-of-week and every-N-days are cheap and a day-of-month would not be:
- * that needs month lengths, and then leap years, and then a calendar. */
+/* Wall-clock schedules use epoch-day arithmetic */
 #define CAL_EVERY_NDAY 0u   /* param = N days, phase taken from the epoch */
 #define CAL_WEEKDAY    1u   /* param = 0 for Sunday */
 
@@ -776,29 +708,21 @@ typedef struct
     u32 daySec;    /* seconds since local midnight */
 } CalSpec;
 
-/* "<N>d-HH-MM", and "sun-HH-MM" with the other six day names. Hours and minutes
- * are two digits each, so 1d-3-30 is rejected rather than guessed at. */
+/* Grammar is <N>d-HH-MM or <weekday>-HH-MM with fixed-width time fields */
 bool ParseCalendar(const char *s, CalSpec *out);
 
-/* Local days since the epoch, seconds into that day, and the weekday of such a
- * day. The offset is compile-time (CFG_TZ_OFFSET_SEC) because a tzdata reader
- * is a parser, a file dependency and a DST table. */
+/* CFG_TZ_OFFSET_SEC is fixed at build time, no tzdata is read */
 u64 LocalDayNum(u64 unixSec, i32 tzOffsetSec);
 u32 LocalDaySec(u64 unixSec, i32 tzOffsetSec);
 u32 LocalWeekday(u64 dayNum);
 
-/* Seconds until the spec next matches, always > 0: landing exactly on the
- * target waits for the following occurrence rather than refiring on the spot. */
+/* Always positive, an exact match advances to the next occurrence */
 u64 SecsUntilCalendar(const CalSpec *c, u64 unixSec, i32 tzOffsetSec);
 
-/* The next interval deadline after prevNs, always > nowNs. Advancing from the
- * previous deadline rather than from the wake time is what keeps the phase: add
- * the interval to "now" instead and every wake-up's scheduling latency is kept,
- * so a task first run at 03:21 is minutes later by the end of the year.
- * Deadlines already missed are dropped, never queued. */
+/* Advances from the prior deadline to preserve phase, missed slots are dropped */
 u64 IntervalAdvance(u64 prevNs, u64 intervalNs, u64 nowNs);
 
-/* Dotted quad to a host-order u32. init resolves no hostnames. */
+/* Dotted quad to host byte order */
 bool ParseIPv4(const char *s, u32 *out);
 
 usize FmtU64(char *dst, usize cap, u64 v);
@@ -1071,8 +995,7 @@ static bool IsDig(char c)
     return c >= '0' && c <= '9';
 }
 
-/* Characters, not pointers. An array of string pointers needs a relocation per
- * element, which a read-only segment cannot carry on every target. */
+/* Pointer-free so read-only data needs no relocations */
 static const char CAL_DAY_NAME[7][4] =
 {
     "sun", "mon", "tue", "wed", "thu", "fri", "sat"
@@ -1084,8 +1007,6 @@ bool ParseCalendar(const char *s, CalSpec *out)
     if(len < 7)
         return false;
 
-    /* the trailing "-HH-MM" is fixed width, so whatever precedes it is the
-       recurrence and can be told apart by shape alone */
     const char *t = s + len - 6;
     if(t[0] != '-' || t[3] != '-')
         return false;
@@ -1134,8 +1055,7 @@ bool ParseCalendar(const char *s, CalSpec *out)
     return true;
 }
 
-/* A west-of-UTC offset against a clock still at the epoch would go negative,
-   which is every board with no RTC until its first sync. */
+/* Clamp pre-sync clocks before applying a west-of-UTC offset */
 static u64 LocalSecs(u64 unixSec, i32 tzOffsetSec)
 {
     i64 local = (i64)unixSec + tzOffsetSec;
@@ -1163,9 +1083,7 @@ static bool CalMatchesDay(const CalSpec *c, u64 dayNum)
     if(c->kind == CAL_WEEKDAY)
         return LocalWeekday(dayNum) == c->param;
 
-    /* ParseCalendar rejects a zero period, so this only guards a future caller.
-       Worth the branch: dividing by zero here is SIGFPE in PID 1, which the
-       kernel reports as a panic rather than a crash. */
+    /* Guard direct callers from a PID 1 divide-by-zero panic */
     if(c->param == 0)
         return false;
 
@@ -1180,8 +1098,7 @@ u64 IntervalAdvance(u64 prevNs, u64 intervalNs, u64 nowNs)
     u64 next = prevNs + intervalNs;
     if(next <= nowNs)
     {
-        /* more than one interval behind, so skip the slots that went by and
-           land on the first one still ahead, keeping the original phase */
+        /* Skip missed slots without shifting phase */
         u64 behind = nowNs - next;
         next += (behind / intervalNs + 1ull) * intervalNs;
     }
@@ -1193,8 +1110,6 @@ u64 SecsUntilCalendar(const CalSpec *c, u64 unixSec, i32 tzOffsetSec)
     u64 dayNum = LocalDayNum(unixSec, tzOffsetSec);
     u64 daySec = LocalDaySec(unixSec, tzOffsetSec);
 
-    /* a period of N repeats within N days and a weekday within 7, so the search
-       terminates without knowing anything about months */
     u64 span = c->kind == CAL_WEEKDAY ? 7ull : c->param;
 
     for(u64 off = 0; off <= span; off++)
@@ -1428,14 +1343,9 @@ bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
     return true;
 }
 
-/* ======================================================================
- * boot arena
- * ====================================================================== */
+/* boot arena */
 
-/* One contiguous region fixed at compile time. Bump allocation only, there is
- * no free.
- * The scan region goes back with ArenaReset each event loop iteration.
- * Exhaustion returns NULL and is a logged, non-fatal condition. */
+/* Temporary owners reset to saved marks, exhaustion returns NULL */
 typedef struct
 {
     u8    *base;
@@ -1496,41 +1406,26 @@ void ArenaReset(Arena *a, usize mark)
         a->used = mark;
 }
 
-/* ======================================================================
- * shared log ring
- * ====================================================================== */
+/* shared log ring */
 
-/* Mapped MAP_SHARED|MAP_ANONYMOUS at boot so the forked writer reads the same
- * pages init writes, with no pipe and no copy.
- *
- * Fixed-size slots rather than a byte ring, so a lapped reader can resynchronise
- * by jumping its cursor forward. A variable-length ring would need a framing
- * scan to do that. Overflow drops the oldest slots, which is intended: the
- * alternative is stalling the producing task. */
+/* Shared fixed-size slots let a lapped reader resync without blocking PID 1 */
 
 #define LOG_SLOT_BYTES 128
 #define LOG_TEXT_MAX   (LOG_SLOT_BYTES - 16)
 
-#define LOG_RING_MAGIC 0x474f4c31u   /* "GOL1" */
+#define LOG_RING_MAGIC 0x474f4c31u
 
-/* stream ids */
 #define LOG_SRC_INIT 0
 #define LOG_SRC_OUT  1
 #define LOG_SRC_ERR  2
 
-/* slot flags */
-#define LOG_F_DISK 0x1u   /* the writer should persist this record */
+#define LOG_F_DISK 0x1u
 #define LOG_F_CONT 0x2u   /* continuation of an oversized line */
 
-/* Shutdown reaches the writer through shared memory rather than a signal, so it
- * flushes what it has instead of dying on the default disposition mid-buffer */
+/* Shared control lets the writer flush before shutdown */
 #define LOG_CTL_SHUTDOWN 0x1u
 
-/* Every counter the two processes share is register-width. A u64 on a 32-bit
- * target lowers to __atomic_load_8, which libatomic implements with a lock table
- * private to one process, worthless across the MAP_SHARED boundary these
- * counters exist to cross. At 32 bits they wrap, which the modular head - tail
- * arithmetic already handles, the gap never exceeding the slot count. */
+/* Native-width atomics avoid process-private libatomic locks on 32-bit targets */
 typedef usize RingSeq;
 
 typedef struct
@@ -1596,13 +1491,12 @@ typedef struct
     RingSlot slot[];
 } LogRing;
 
-/* bytes must be >= 2 * LOG_SLOT_BYTES. Slot count rounds down to a power of
- * two. False if the region is too small. */
+/* Requires two slots, rounds capacity down to a power of two */
 bool RingInit(LogRing *r, usize bytes);
 
 void RingWrite(LogRing *r, u8 stream, u8 task, u32 flags, const char *text, usize len);
 
-/* False when no valid record was read. *lost counts lapped or malformed slots */
+/* lost counts lapped or malformed slots */
 bool RingRead(LogRing *r, LogSlot *out, u64 *lost);
 
 usize RingPending(const LogRing *r);
@@ -1688,7 +1582,6 @@ bool RingRead(LogRing *r, LogSlot *out, u64 *lost)
     if(tail == head)
         return false;
 
-    /* lapped, the oldest slots are already overwritten */
     if(head - tail > r->slots)
     {
         RingSeq skip = (head - tail) - r->slots;
@@ -1736,9 +1629,7 @@ usize RingPending(const LogRing *r)
     return (usize)(head - tail);
 }
 
-/* ======================================================================
- * task rules
- * ====================================================================== */
+/* task rules */
 
 const TaskRule *TaskRuleFind(const char *name);
 
@@ -1747,7 +1638,7 @@ u8 LogPolicyResolve(u8 policy, u8 defaultPolicy)
     return policy == LOGP_INHERIT ? defaultPolicy : policy;
 }
 
-/* First match wins. Most tasks have no entry and run on the defaults. */
+/* First match wins, unmatched tasks use defaults */
 const TaskRule *TaskRuleFind(const char *name)
 {
     for(const TaskRule *r = TASK_RULES; r->name != NULL; r++)
@@ -1758,12 +1649,9 @@ const TaskRule *TaskRuleFind(const char *name)
     return NULL;
 }
 
-/* ======================================================================
- * respawn backoff
- * ====================================================================== */
+/* respawn backoff */
 
-/* Instant respawn turns a segfault on a retransmitted packet into a
- * fork bomb. */
+/* Backoff prevents crash-loop fork storms */
 
 u64  BackoffNext(u64 currentNs);
 bool BackoffStable(u64 startedNs, u64 exitedNs, u64 stableNs);
@@ -1792,24 +1680,19 @@ u32 RestartFailuresNext(u32 currentFails, u64 startedNs, u64 exitedNs, u64 stabl
     return BackoffStable(startedNs, exitedNs, stableNs) ? 0 : currentFails + 1;
 }
 
-/* ======================================================================
- * /proc/PID/stat
- * ====================================================================== */
+/* /proc/PID/stat */
 
-/* Tier 1 liveness: /proc/PID/stat inspection, always on, needs no cooperation
- * from the task. Heuristic only. An idle daemon and a deadlocked one both
- * show zero CPU, so this never triggers a restart on its own. */
+/* CPU inactivity is diagnostic only, never a restart trigger */
 
 typedef struct
 {
-    char state;    /* R S D Z T ... */
+    char state;
     u64  utime;    /* clock ticks */
     u64  stime;    /* clock ticks */
     u64  threads;
 } ProcStat;
 
-/* comm is parenthesised and can itself contain spaces and parens, so field
- * splitting starts after the last ')'. buf must be NUL-terminated. */
+/* comm may contain spaces and parens, fields start after its last ')' */
 bool ProcStatParse(const char *buf, usize len, ProcStat *out);
 
 bool ProcStatParse(const char *buf, usize len, ProcStat *out)
@@ -1864,25 +1747,18 @@ bool ProcStatParse(const char *buf, usize len, ProcStat *out)
     return field >= 15;
 }
 
-/* ======================================================================
- * SNTP packets
- * ====================================================================== */
+/* SNTP packets */
 
-/* Client only: no listening socket, no server mode, no broadcast. Packet
- * handling is split from the socket so the parser, which eats untrusted network
- * input, is unit-testable on the host. */
+/* Packet handling stays syscall-free for host tests */
 
 #define SNTP_PKT_BYTES 48
-#define NTP_UNIX_DELTA 2208988800ull   /* seconds between 1900 and 1970 */
+#define NTP_UNIX_DELTA 2208988800ull
 #define NTP_ERA_SECONDS (1ull << 32)
 
-/* transmitNtp comes back in the server's originate field, and is what
- * SntpParseReply matches against. */
+/* Replies must echo transmitNtp in the originate field */
 void SntpBuildRequest(u8 pkt[SNTP_PKT_BYTES], u64 transmitNtp);
 
-/* Returns false for anything malformed: wrong mode, stratum 0 (kiss-of-death)
- * or above 15, or an originate field that does not match the request. Every
- * field is read byte-wise, unaligned loads being unsafe on ARMv6. */
+/* Parse fields byte-wise because ARMv6 forbids unaligned loads */
 bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUnixNs);
 
 /* 64-bit NTP timestamp: 32.32 fixed point seconds since 1900 */
@@ -1892,8 +1768,6 @@ u64 SntpNtpFromUnixNs(u64 unixNs);
 u64 SntpUnixNsFromNtp(u64 ntp, u64 floorUnixSec);
 u64 SntpCorrectForRtt(u64 unixNs, u64 sentNs, u64 receivedNs);
 
-/* The sockaddr fields are the only multi-byte integers init hands to the kernel
- * in network order. The packet itself goes through Load64BE/Store64BE. */
 u16  Hton16(u16 v);
 u32  Hton32(u32 v);
 
@@ -1960,7 +1834,7 @@ u64 SntpYearFloorSec(u64 year)
 
 u64 SntpBuildFloorSec(void)
 {
-    /* __DATE__ is "Mmm dd yyyy", January 1 leaves room for clock skew */
+    /* __DATE__ layout is "Mmm dd yyyy" */
     const char *date = __DATE__;
     u64 year = (u64)(date[7] - '0') * 1000 +
                (u64)(date[8] - '0') * 100 +
@@ -2027,12 +1901,10 @@ bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUni
     return true;
 }
 
-/* ======================================================================
- * status interface
- * ====================================================================== */
+/* status interface */
 
 #define STATUS_PATH    "/run/init.status"
-#define STATUS_MAGIC   0x53544131u   /* "STA1" */
+#define STATUS_MAGIC   0x53544131u
 #define STATUS_VERSION 2u
 
 #define TS_PENDING 0u   /* waiting for its first run */
@@ -2153,12 +2025,9 @@ static bool StatusRead(const StatusBlock *status, StatusSnapshot *snapshot,
 
 #if !defined(INIT_HOSTED)
 
-/* ======================================================================
- * syscalls
- * ====================================================================== */
+/* syscalls */
 
-/* One variant per architecture. Everything below returns the kernel's raw
- * result: negative errno on failure, and there is no errno global. */
+/* Wrappers return raw kernel results with negative errno */
 
 #if defined(__x86_64__)
 
@@ -2268,10 +2137,7 @@ static inline isize SysCall6(isize n, isize a, isize b, isize c, isize d, isize 
 
 #elif defined(__mips__) && _MIPS_SIM == _ABIO32
 
-/* Two o32 departures. Arguments five and six travel in the caller's stack
- * argument slots, which is why $sp moves here and not in the prologue. Failure
- * arrives as a3 set with a positive errno in v0, so this is the one arch where
- * the sign gets applied by hand to keep every caller's `r < 0` test working. */
+/* o32 passes args 5 and 6 on the stack and reports positive errno via a3 */
 static inline isize SysCall6(isize n, isize a, isize b, isize c, isize d, isize e, isize f)
 {
     register isize v0 __asm__("$2") = n;
@@ -2309,7 +2175,7 @@ static inline isize SysCall4(isize n, isize a, isize b, isize c, isize d)
 static inline isize SysCall5(isize n, isize a, isize b, isize c, isize d, isize e)
 { return SysCall6(n, a, b, c, d, e, 0); }
 
-/* relocation types the static-pie self-relocator applies */
+/* static-pie relocation types */
 #if defined(__x86_64__)
   #define R_RELATIVE   8      /* R_X86_64_RELATIVE */
   #define RELOC_RELA   1
@@ -2329,13 +2195,11 @@ static inline isize SysCall5(isize n, isize a, isize b, isize c, isize d, isize 
   #define R_RELATIVE   23     /* R_ARM_RELATIVE */
   #define RELOC_RELA   0
 #elif defined(__mips__)
-  /* MIPS resolves position independence through the GOT, so there is no table
-   * of RELATIVE entries for this relocator to walk. The port builds
-   * -static -no-pie, and the Makefile defaults PIE=0 for it. */
+  /* MIPS GOT relocation is unsupported, so this target is non-PIE */
   #define RELOC_NONE   1
 #endif
 
-/* ---- typed wrappers ---- */
+/* typed wrappers */
 
 static inline isize SysRead(i32 fd, void *buf, usize n)
 { return SysCall3(SYS_read, fd, (isize)buf, (isize)n); }
@@ -2526,7 +2390,7 @@ static inline isize SysGetRandom(void *buf, usize n, u32 flags)
 static inline isize SysSchedYield(void)
 { return SysCall0(SYS_sched_yield); }
 
-/* ---- helpers built on the above ---- */
+/* syscall helpers */
 
 static inline u64 SysNow(i32 clk)
 {
@@ -2551,13 +2415,9 @@ static inline bool SysSetNonBlock(i32 fd)
 
 #if !defined(INIT_FIXTURE)
 
-/* ======================================================================
- * logging
- * ====================================================================== */
+/* logging */
 
-/* init owns logging policy. Tasks never decide where their output
- * goes. PID 1 drains their pipes non-blocking into the shared ring, and a
- * forked child does the disk writes. */
+/* PID 1 only drains nonblocking pipes, the forked writer owns disk I/O */
 
 typedef struct
 {
@@ -2568,7 +2428,6 @@ typedef struct
 void LogAttach(LogRing *ring, i32 consoleFd);
 void LogSetVerbose(bool bOn);
 
-/* init's own diagnostics: console plus ring, always flagged for disk */
 void LogF(const char *fmt, ...);
 void LogRaw(const char *text, usize len);
 
@@ -2591,8 +2450,7 @@ void LogSetVerbose(bool bOn)
     G_VERBOSE = bOn;
 }
 
-/* text carries no trailing newline. The console gets one appended, the ring
- * stores one record per line and needs none. */
+/* text excludes the console newline */
 void LogRaw(const char *text, usize len)
 {
     if(G_VERBOSE && G_CONSOLE_FD >= 0)
@@ -2644,7 +2502,7 @@ void LogFeed(LineBuf *lb, u8 stream, u8 task, u8 policy, const char *data, usize
 
         if(lb->len + 1 >= sizeof(lb->buf))
         {
-            /* The triggering byte starts the next fragment */
+            /* Keep the triggering byte in the next fragment */
             LogEmit(stream, task, policy, LOG_F_CONT, lb->buf, lb->len);
             lb->len = 0;
         }
@@ -2663,11 +2521,8 @@ void LogFlushPartial(LineBuf *lb, u8 stream, u8 task, u8 policy)
 
 void StatusInit(StatusBlock *status, StatusSnapshot *snapshot);
 
-/* ======================================================================
- * state
- * ====================================================================== */
+/* state */
 
-/* One type for everything init runs, discriminated by schedule. */
 #define SCHED_ALWAYS 0u   /* /tasks/always/       supervised, respawned */
 #define SCHED_BOOT   1u   /* /tasks/boot/         run at boot, not respawned */
 #define SCHED_EVERY  2u   /* /tasks/<dur>/        interval since boot */
@@ -2683,7 +2538,7 @@ typedef struct
     u64  intervalNs;
     CalSpec cal;        /* SCHED_CAL only */
 
-    /* resolved from TASK_RULES at scan time */
+    /* Resolved from TASK_RULES at scan time */
     u32  uid;
     u32  gid;
     u64  capMask;
@@ -2721,7 +2576,7 @@ typedef struct
     i32  lastProbeRc;
     u64  lastProbeNs;
     u32  probeFails;
-    bool bProbeKilled;   /* timeout already counted, do not count it twice */
+    bool bProbeKilled;   /* timeout already counted */
 
     u64  lastCpuTicks;
     u64  lastSampleNs;
@@ -2778,7 +2633,7 @@ typedef struct
 extern InitState G_INIT;
 extern char *G_ENVP[];
 
-/* set from signal handlers, consumed by the event loop */
+/* Written by handlers and consumed by the event loop */
 extern volatile i32 G_SIG_CHLD;
 extern volatile i32 G_SIG_SHUTDOWN;
 
@@ -2815,11 +2670,9 @@ void ChildPrepare(void);
 void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask);
 i32  SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t);
 
-/* ======================================================================
- * directory listing
- * ====================================================================== */
+/* directory listing */
 
-/* Names are duplicated into the arena, the caller resets it when done. */
+/* Names live until the caller resets its arena mark */
 
 typedef struct
 {
@@ -2827,8 +2680,7 @@ typedef struct
     usize  count;
 } DirList;
 
-/* DT_UNKNOWN entries are always accepted, some filesystems never fill d_type
- * in. Dotfiles are skipped. */
+/* Accept DT_UNKNOWN because some filesystems omit d_type */
 bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 wantType);
 
 #define DIR_BUF_BYTES 4096
@@ -2894,9 +2746,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
     return true;
 }
 
-/* ======================================================================
- * tasks
- * ====================================================================== */
+/* tasks */
 
 NORETURN void ChildFail(const char *step, isize result)
 {
@@ -2939,8 +2789,7 @@ void ChildPrepare(void)
 void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
 {
 #if FEATURE_CAPABILITY_DROP
-    /* Order is load-bearing: no_new_privs, bounding set, ids, capset.
-     * The ambient set is what carries the retained caps across execve. */
+    /* Order is no_new_privs, bounding set, ids, capset then ambient set */
     ChildCheck("PR_SET_NO_NEW_PRIVS",
                SysPrctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
 
@@ -2956,9 +2805,7 @@ void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
         ChildCheck("PR_SET_KEEPCAPS",
                    SysPrctl(PR_SET_KEEPCAPS, 1, 0, 0, 0));
 
-    /* Dropping the uid without the gid leaves the child in group 0 holding
-     * root's supplementary groups, which looks dropped and is not. A rule that
-     * names a uid and no gid gets the uid as its gid. */
+    /* UID-only rules use the UID as GID and always clear supplementary groups */
     if(bDropping || gid != 0)
     {
         ChildCheck("setgroups", SysSetGroups(0, NULL));
@@ -3059,9 +2906,7 @@ static void TaskApplyRule(Task *t)
                                     CFG_STDERR_POLICY);
 }
 
-/* When a deadline-driven task next runs, on CLOCK_BOOTTIME like everything in
- * the event loop. SCHED_CAL reads the wall clock to place the deadline, so a
- * realtime step invalidates it and TaskRedateCal runs after every sync. */
+/* Calendar deadlines are projected onto CLOCK_BOOTTIME */
 static u64 TaskNextRunNs(const Task *t, u64 nowNs)
 {
     if(t->schedule == SCHED_EVERY)
@@ -3076,9 +2921,7 @@ static u64 TaskNextRunNs(const Task *t, u64 nowNs)
     return nowNs;
 }
 
-/* Move a deadline-driven task to its next slot after it has just fired. An
- * interval keeps its phase by counting from the deadline it met. A calendar
- * recurrence re-derives from the wall clock, which is its own anchor. */
+/* Intervals preserve phase, calendars re-anchor to realtime */
 static void TaskAdvanceDeadline(Task *t, u64 nowNs)
 {
     t->nextRunNs = t->schedule == SCHED_EVERY
@@ -3086,9 +2929,7 @@ static void TaskAdvanceDeadline(Task *t, u64 nowNs)
         : TaskNextRunNs(t, nowNs);
 }
 
-/* An unsynced board boots at the epoch, so calendar tasks are scheduled against
- * a clock reading 1970 and land early. Re-dating them on the first sync is what
- * makes that a wrong start time rather than a task that never runs. */
+/* Re-date calendar tasks after realtime steps from an unsynced epoch clock */
 #if !OFFLINE_MODE
 static void TaskRedateCal(InitState *st, u64 nowNs)
 {
@@ -3102,9 +2943,7 @@ static void TaskRedateCal(InitState *st, u64 nowNs)
         u64 moved = next > t->nextRunNs ? next - t->nextRunNs : t->nextRunNs - next;
         t->nextRunNs = next;
 
-        /* SecsUntilCalendar works in whole seconds against a nanosecond clock,
-           so an untouched deadline still comes back a fraction different. Only
-           a real step is worth a line: this runs after every poll. */
+        /* Ignore subsecond drift from whole-second calendar arithmetic */
         if(moved > NS_PER_SEC)
         {
             LogF("%s: next run in %llus after clock step", TaskName(t),
@@ -3476,8 +3315,7 @@ void TaskTick(InitState *st, u64 nowNs)
             }
             else if(nowNs >= t->nextRunNs)
             {
-                /* advance before spawning, or the tick below sees the deadline
-                 * it just met and counts a spurious overrun */
+                /* Advance before spawning to avoid a false overrun */
                 TaskAdvanceDeadline(t, nowNs);
                 TaskStart(st, t, nowNs);
             }
@@ -3497,8 +3335,7 @@ void TaskTick(InitState *st, u64 nowNs)
                 t->killDeadlineNs = 0;
             }
 
-            /* a periodic task still running when its next interval arrives is
-             * logged and passed over, never queued */
+            /* Skip rather than queue overlapping periodic runs */
             if((t->schedule == SCHED_EVERY || t->schedule == SCHED_CAL) &&
                nowNs >= t->nextRunNs)
             {
@@ -3606,12 +3443,7 @@ void TaskPublish(InitState *st)
     StatusPublish(sb, snapshot);
 }
 
-/* ======================================================================
- * liveness
- * ====================================================================== */
-
-/* Pull-based. wait4 only detects death, so a daemon that is deadlocked
- * or no longer answering its socket stays "alive" forever. */
+/* liveness */
 
 void ProcSample(Task *t, u64 nowNs)
 {
@@ -3636,8 +3468,6 @@ void ProcSample(Task *t, u64 nowNs)
     if(!ProcStatParse(buf, (usize)n, &ps))
         return;
 
-    /* never restarts on its own: an idle daemon at 03:00 and a deadlocked one
-     * both show zero CPU */
     if(ps.state != t->lastProcState)
     {
         if(ps.state == 'D')
@@ -3653,11 +3483,8 @@ void ProcSample(Task *t, u64 nowNs)
 
 #if FEATURE_EXEC_PROBES
 
-/* Shared by the reap path and the timeout path, so a probe that never comes
- * back is accounted for exactly like one that comes back failing. */
 static void ProbeFailed(Task *t, u64 nowNs)
 {
-    /* probes firing before a task is ready cause restart loops */
     if(nowNs - t->startedNs < t->graceNs)
         return;
 
@@ -3682,18 +3509,13 @@ void ProbeTick(InitState *st, Task *t, u64 nowNs)
 
     if(t->probePid > 0)
     {
-        /* a hung check binary has to be killed, or one process leaks per
-         * interval and it presents as a memory leak */
         if(nowNs - t->probeStartNs < t->probeTimeoutNs)
             return;
 
         SysKill(t->probePid, SIGKILL);
         t->probeStartNs = nowNs;
 
-        /* SIGKILL does not remove a process from uninterruptible sleep, so a
-           check wedged on dead I/O never reaches ProbeReap. Counting the
-           timeout here is what stops that task from silently falling out of
-           supervision, and the kill is repeated in case the I/O ever lands. */
+        /* Count before reap because uninterruptible I/O can defer SIGKILL */
         t->bProbeKilled = true;
         t->lastProbeNs = nowNs;
         t->lastProbeRc = -(i32)SIGKILL;
@@ -3732,7 +3554,6 @@ bool ProbeReap(InitState *st, i32 pid, i32 status, u64 nowNs)
         t->lastProbeNs = nowNs;
         t->nextProbeNs = nowNs + t->probeIntervalNs;
 
-        /* the timeout path already counted this one and killed it */
         if(t->bProbeKilled)
         {
             t->bProbeKilled = false;
@@ -3776,13 +3597,9 @@ bool ProbeReap(InitState *st, i32 pid, i32 status, u64 nowNs)
 
 #endif
 
-/* ======================================================================
- * watchdog
- * ====================================================================== */
+/* watchdog */
 
-/* Petting is gated on liveness. An unconditional pet from the event
- * loop keeps a happy watchdog while a critical daemon is wedged, which protects
- * nothing. */
+/* Critical task health gates watchdog pets */
 
 #if FEATURE_WATCHDOG
 
@@ -3821,7 +3638,7 @@ static bool WdogCriticalHealthy(const InitState *st, u64 nowNs)
 
         if(t->bHasCheck)
         {
-            /* inside the grace window there is no verdict yet, so trust it */
+            /* No probe verdict exists during grace */
             if(nowNs - t->startedNs < t->graceNs)
                 continue;
             if(t->lastProbeRc != 0)
@@ -3849,8 +3666,7 @@ void WdogTick(InitState *st, u64 nowNs)
 
 void WdogClose(InitState *st)
 {
-    /* closing without the magic 'V' leaves the timer armed, which is what
-     * PID 1 wants */
+    /* Omit the magic 'V' so close leaves the watchdog armed */
     if(st->wdogFd >= 0)
     {
         SysClose(st->wdogFd);
@@ -3878,12 +3694,7 @@ void WdogClose(InitState *st)
 
 #endif
 
-/* ======================================================================
- * SNTP socket
- * ====================================================================== */
-
-/* Asynchronous throughout, PID 1 never stalls on the network. Permanent failure
- * only degrades calendar scheduling. */
+/* SNTP socket */
 
 #if OFFLINE_MODE
 
@@ -4024,17 +3835,9 @@ void SntpHandleReply(InitState *st, u64 nowNs)
 
 #endif
 
-/* ======================================================================
- * log writer
- * ====================================================================== */
+/* log writer */
 
-/* Disk writes never happen in PID 1. Managed flash stalls for seconds
- * under garbage collection, and a write() stuck in PID 1 halts supervision
- * system-wide.
- *
- * Same binary, different entry point, reached by fork() without execve. That
- * needs no argv parsing, no /proc/self/exe resolution and no re-run of early
- * boot, and cannot pick up a replaced on-disk binary. */
+/* Forked without exec so PID 1 never performs disk I/O */
 
 #if FEATURE_LOG_DISK
 
@@ -4068,7 +3871,6 @@ typedef struct
     LogdChains chains;
 } LogdState;
 
-/* Room for one record, its repeat summary and a ring-loss summary */
 #define LOGD_DRAIN_RESERVE (3u * LOG_SLOT_BYTES)
 
 _Static_assert(CFG_LOGD_BUF_BYTES >= LOGD_DRAIN_RESERVE,
@@ -4250,7 +4052,7 @@ static bool LogdInsertChain(LogdState *ls, LogdChain *chain, const char *text,
     return true;
 }
 
-/* damped dedup: during a crash loop this is kilobytes instead of megabytes */
+/* Bound crash-loop duplicate output */
 static void LogdEmitRepeats(LogdState *ls, u64 nowNs)
 {
     if(ls->repeats == 0)
@@ -4262,7 +4064,6 @@ static void LogdEmitRepeats(LogdState *ls, u64 nowNs)
         ls->repeats = 0;
 }
 
-/* Unknown task ids use the standalone path */
 static LogdChain *LogdChainSlot(LogdChains *chains, const LogSlot *slot)
 {
     if(slot->task == 0xff)
@@ -4333,8 +4134,7 @@ NORETURN void LogWriterMain(InitState *st)
     SysPrctl(PR_SET_NAME, (usize)(uintptr_t)"init-logd", 0, 0, 0);
     ChildPrepare();
 
-    /* Drop the watchdog fd and every task pipe. init's own watchdog description
-     * stays open and armed. */
+    /* The writer must not retain PID 1's watchdog or task descriptors */
     WdogClose(st);
     for(usize i = 0; i < st->taskCount; i++)
     {
@@ -4346,7 +4146,7 @@ NORETURN void LogWriterMain(InitState *st)
     if(st->sntpFd >= 0)
         SysClose(st->sntpFd);
 
-    /* console stays: the writer reports its own failures somewhere */
+    /* Retain the console for writer failures */
     LogAttach(NULL, st->consoleFd);
 
     SysMkdir("/var", 0755);
@@ -4365,7 +4165,7 @@ NORETURN void LogWriterMain(InitState *st)
 
     for(;;)
     {
-        /* A blocked write freezes the heartbeat */
+        /* A blocked write freezes this heartbeat */
         __atomic_store_n(&st->ring->writerProgress, ++progress, __ATOMIC_RELEASE);
 
         u64 nowNs = SysBootNs();
@@ -4433,8 +4233,7 @@ NORETURN void LogWriterMain(InitState *st)
 
 void LogdSupervise(InitState *st, u64 nowNs)
 {
-    /* Without the ring the writer has nothing to read and no way to be told to
-     * stop, so it would sit through every shutdown until the SIGKILL. */
+    /* The ring carries both records and the shutdown request */
     if(st->ring == NULL || st->logdPid > 0 || st->bShutdown)
         return;
     if(nowNs < st->logdNextSpawnNs)
@@ -4551,17 +4350,9 @@ NORETURN void LogWriterMain(InitState *st)
 
 #endif
 
-/* ======================================================================
- * self-relocation
- * ====================================================================== */
+/* self-relocation */
 
-/* A static-pie binary normally gets its RELATIVE relocations applied by
- * rcrt1.o/_dl_relocate_static_pie, which lives in libc. Without that,
- * every pointer in .data.rel.ro still holds its link-time value and the first
- * dereference faults. So this runs before anything else in _start.
- *
- * Constraints below: no globals, no jump tables, no calls out. None of it can
- * lean on a relocation that has not been applied yet. */
+/* Runs before C, so it may use no globals, jump tables or external calls */
 
 #if UINTPTR_MAX > 0xffffffffu
   #define ELFCLASS_64 1
@@ -4694,19 +4485,14 @@ NO_SSP void InitSelfRelocate(usize base)
 #endif
 }
 
-/* ======================================================================
- * panic
- * ====================================================================== */
+/* panic */
 
 NORETURN void InitPanic(const char *msg);
 NORETURN void __stack_chk_fail(void);
 
 extern usize __stack_chk_guard;
 
-/* -nostdlib means the stack protector's runtime is ours to supply. On x86 the
- * guard also has to be forced to the global symbol, since the default %fs:0x28
- * slot lives in a TLS block only libc sets up. See the Makefile. */
-/* terminator bytes, so a str* overrun cannot write past the guard intact */
+/* x86 uses a global guard because no libc initializes TLS */
 #if UINTPTR_MAX > 0xffffffffu
 usize __stack_chk_guard = 0x00000aff0d0a0000ul;
 #else
@@ -4720,12 +4506,11 @@ NO_SSP void InitGuardSeed(void)
     usize v = 0;
     if(SysGetRandom(&v, sizeof(v), GRND_NONBLOCK) != (isize)sizeof(v))
     {
-        /* pool not ready this early. Boot time plus a stack address is weak,
-         * but unpredictable across boots and better than a link-time constant */
+        /* Weak fallback, boot time and stack address rely on ASLR */
         v = (usize)SysBootNs();
         v ^= (usize)(uintptr_t)&v;
     }
-    /* a zero and a newline in the guard make string-write overruns trip it */
+    /* Preserve one terminator-canary byte */
     __stack_chk_guard = (v & ~(usize)0xff) | 0x0a;
 }
 
@@ -4749,9 +4534,7 @@ NORETURN void __stack_chk_fail(void)
     InitPanic("stack smashing detected");
 }
 
-/* libgcc's ARM division helpers route a zero divisor through __aeabi_idiv0,
- * which calls raise(). Nothing here divides by a value that can be zero, so
- * reaching this means init has a bug. */
+/* libgcc ARM division helpers call raise on a zero divisor */
 #if defined(__arm__)
 int raise(int sig);
 
@@ -4762,8 +4545,7 @@ int raise(int sig)
 }
 #endif
 
-/* i386 emits a call to this local alias so the check costs no PLT entry in
- * position-independent code. Every other target calls the above directly. */
+/* i386 uses a local alias to avoid a PIE PLT entry */
 #if defined(__i386__)
 NORETURN void __stack_chk_fail_local(void);
 
@@ -4773,25 +4555,14 @@ NORETURN void __stack_chk_fail_local(void)
 }
 #endif
 
-/* ======================================================================
- * boot and event loop
- * ====================================================================== */
+/* boot and event loop */
 
 InitState G_INIT;
 
-/* The boot arena. In .bss, so the kernel maps it zero-filled while it loads the
- * ELF, before _start runs: no syscall to make and no failure to handle, on the
- * same lazily faulted anonymous pages an mmap would have returned. It costs no
- * bytes in the file, only a size in the program header.
- *
- * The log ring and status block cannot move here. They are MAP_SHARED so the
- * forked writer sees the same pages, and .bss after fork is copy-on-write. */
+/* The arena is private .bss, shared ring and status pages require MAP_SHARED */
 static u8 G_ARENA[CFG_ARENA_BYTES] __attribute__((aligned(16)));
 
-/* Unqualified on purpose. `char *const` lets a compiler place the array in
- * .rodata, where every element needs a relocation a read-only segment cannot
- * carry. Plain `char *` lands in .data.rel.ro, which the self-relocator already
- * fixes up. Most targets do that anyway, loongarch does not. */
+/* Non-const keeps pointer relocations out of read-only data on loongarch */
 char *G_ENVP[] =
 {
     (char *)"PATH=/sbin:/bin:/usr/sbin:/usr/bin",
@@ -4808,7 +4579,7 @@ extern void InitSigRestore(void);
 
 void InitMain(void);
 
-/* ---------------------------------------------------------------- signals */
+/* signals */
 
 static void OnSigChld(i32 sig)
 {
@@ -4821,7 +4592,7 @@ static void OnSigShutdown(i32 sig)
     G_SIG_SHUTDOWN = sig;
 }
 
-static void InstallHandler(i32 sig, void (*fn)(i32))
+static isize InstallHandler(i32 sig, void (*fn)(i32))
 {
     KSigAction sa;
     memset(&sa, 0, sizeof(sa));
@@ -4831,31 +4602,36 @@ static void InstallHandler(i32 sig, void (*fn)(i32))
     sa.flags |= SA_RESTORER;
     sa.restorer = (usize)InitSigRestore;
 #endif
-    SysSigAction(sig, &sa, NULL);
+    return SysSigAction(sig, &sa, NULL);
 }
 
-/* The kernel discards default-action signals sent to PID 1, so without handlers
- * the system cannot be told to reboot at all. Signals stay blocked
- * outside ppoll, closing the race between testing a flag and sleeping. */
+/* Block outside ppoll to close the flag-check-to-sleep race */
 static void SignalSetup(KSigSet *outUnblocked)
 {
-    InstallHandler(SIGCHLD, OnSigChld);
-    InstallHandler(SIGTERM, OnSigShutdown);
-    InstallHandler(SIGUSR1, OnSigShutdown);
-    InstallHandler(SIGUSR2, OnSigShutdown);
-    InstallHandler(SIGINT, OnSigShutdown);
-    InstallHandler(SIGHUP, OnSigShutdown);
+    if(InstallHandler(SIGCHLD, OnSigChld) < 0)
+        InitPanic("SIGCHLD handler setup failed");
+    if(InstallHandler(SIGTERM, OnSigShutdown) < 0)
+        InitPanic("SIGTERM handler setup failed");
+    if(InstallHandler(SIGUSR1, OnSigShutdown) < 0)
+        InitPanic("SIGUSR1 handler setup failed");
+    if(InstallHandler(SIGUSR2, OnSigShutdown) < 0)
+        InitPanic("SIGUSR2 handler setup failed");
+    if(InstallHandler(SIGINT, OnSigShutdown) < 0)
+        InitPanic("SIGINT handler setup failed");
+    if(InstallHandler(SIGHUP, OnSigShutdown) < 0)
+        InitPanic("SIGHUP handler setup failed");
 
     KSigSet block;
     block.bits = (1ull << (SIGCHLD - 1)) | (1ull << (SIGTERM - 1)) |
                  (1ull << (SIGUSR1 - 1)) | (1ull << (SIGUSR2 - 1)) |
                  (1ull << (SIGINT - 1)) | (1ull << (SIGHUP - 1));
-    SysSigProcMask(SIG_BLOCK, &block, NULL);
+    if(SysSigProcMask(SIG_BLOCK, &block, NULL) < 0)
+        InitPanic("signal mask setup failed");
 
     outUnblocked->bits = 0;
 }
 
-/* ------------------------------------------------------------- early boot */
+/* early boot */
 
 static bool MountOne(const char *src, const char *tgt, const char *fs, u32 flags)
 {
@@ -4876,8 +4652,7 @@ static bool MountEarly(void)
 
 static i32 OpenConsole(void)
 {
-    /* O_APPEND so a harness can point this at a regular file and still get an
-     * ordered transcript from several writers */
+    /* O_APPEND preserves ordering when a harness uses a regular file */
     isize fd = SysOpen("/dev/console", O_WRONLY | O_APPEND | O_NOCTTY | O_CLOEXEC, 0);
     if(fd < 0)
         return 2;   /* kernel already handed init /dev/console as 0/1/2 */
@@ -4933,7 +4708,7 @@ void StatusInit(StatusBlock *status, StatusSnapshot *snapshot)
     StatusPublish(status, snapshot);
 }
 
-/* --------------------------------------------------------------- shutdown */
+/* shutdown */
 
 static void RemountReadOnly(Arena *arena)
 {
@@ -5109,7 +4884,7 @@ static void ShutdownBegin(InitState *st, i32 sig, u64 nowNs)
     LogF("shutdown requested by signal %d", sig);
     TaskSignalAll(st, SIGTERM);
 
-    /* the writer drains and flushes on this rather than dying mid-buffer */
+    /* Request a final writer drain and flush */
     if(st->ring != NULL)
         __atomic_store_n(&st->ring->control, LOG_CTL_SHUTDOWN, __ATOMIC_RELEASE);
     TaskPublish(st);
@@ -5125,11 +4900,10 @@ static NORETURN void ShutdownFinish(InitState *st)
 
     SysReboot(st->shutdownCmd);
 
-    /* reboot only returns on failure */
     InitPanic("reboot syscall failed");
 }
 
-/* ------------------------------------------------------------- event loop */
+/* event loop */
 
 static void ReapAll(InitState *st, u64 nowNs)
 {
@@ -5147,7 +4921,7 @@ static void ReapAll(InitState *st, u64 nowNs)
             continue;
         if(LogdReap(st, p, status, nowNs))
             continue;
-        /* an orphan reparented to PID 1 that init never spawned */
+        /* Reap unknown orphans reparented to PID 1 */
     }
 }
 
@@ -5270,14 +5044,13 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
                 SntpHandleReply(st, SysBootNs());
                 continue;
             }
-            /* Drain even on POLLHUP. A child blocked writing to a pipe nobody
-             * reads hangs while still looking alive to wait4. */
+            /* Drain POLLHUP so writers cannot block behind unread pipe data */
             TaskDrain(st, owner[i]);
         }
     }
 }
 
-/* -------------------------------------------------------------------- boot */
+/* boot */
 
 void InitMain(void)
 {
@@ -5311,7 +5084,7 @@ void InitMain(void)
     KSigSet unblocked;
     SignalSetup(&unblocked);
 
-    /* forked before the remaining boot steps so their failures get captured */
+    /* Start the writer before later boot diagnostics */
     LogdSupervise(st, SysBootNs());
 
     WdogOpen(st);

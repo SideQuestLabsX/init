@@ -1,18 +1,9 @@
-/* Host unit tests for the parts that touch no syscalls.
- *
- * These run anywhere a C compiler does, with no target device, no root and no
- * qemu. The arithmetic deciding when a task respawns and the parser eating
- * untrusted network input are the parts worth testing off-target. The
- * syscall-bound half is covered by the boot tests in tools/. */
-
 #include <stdio.h>
 #include <string.h>
 #if !defined(_WIN32)
   #include <pthread.h>
 #endif
 
-/* the shipped source, cut down by INIT_HOSTED. Including it keeps the tests
- * pinned to what actually ships. */
 #include "init.c"
 
 static u32 G_CHECKS = 0;
@@ -30,8 +21,6 @@ static const char *G_GROUP = "";
     } while(0)
 
 #define GROUP(name) G_GROUP = (name)
-
-/* ------------------------------------------------------------------ string */
 
 static void TestStrings(void)
 {
@@ -121,16 +110,13 @@ static void TestNumbers(void)
     CHECK(!ParseDuration("weekly", &ns));
     CHECK(!ParseDuration("18446744073709551615d", &ns));
 
-    /* every accepted directory spelling, in one place. An interval and a
-       calendar recurrence are told apart by the trailing -HH-MM: 3d counts from
-       boot, 3d-03-30 counts epoch days and fires at a wall-clock time. */
     CalSpec c;
     CHECK(ParseDuration("500ms", &ns) && ns == 500ull * NS_PER_MS);
     CHECK(ParseDuration("30s", &ns) && ns == 30ull * NS_PER_SEC);
     CHECK(ParseDuration("5m", &ns) && ns == 300ull * NS_PER_SEC);
     CHECK(ParseDuration("1h", &ns) && ns == 3600ull * NS_PER_SEC);
     CHECK(ParseDuration("3d", &ns) && ns == 3ull * 86400ull * NS_PER_SEC);
-    CHECK(!ParseCalendar("3d", &c));              /* no time, so it is an interval */
+    CHECK(!ParseCalendar("3d", &c));
 
     CHECK(ParseCalendar("1d-03-30", &c) &&
           c.kind == CAL_EVERY_NDAY && c.param == 1 && c.daySec == 3 * 3600 + 30 * 60);
@@ -145,62 +131,56 @@ static void TestNumbers(void)
     CHECK(ParseCalendar("sat-23-59", &c) &&
           c.param == 6 && c.daySec == 23 * 3600 + 59 * 60);
 
-    CHECK(!ParseCalendar("daily-03-30", &c));     /* 1d-03-30 says it once */
+    CHECK(!ParseCalendar("daily-03-30", &c));
     CHECK(!ParseCalendar("1d-24-00", &c));
     CHECK(!ParseCalendar("1d-12-60", &c));
-    CHECK(!ParseCalendar("1d-3-30", &c));         /* both fields are two digits */
+    CHECK(!ParseCalendar("1d-3-30", &c));
     CHECK(!ParseCalendar("1d-03-30-00", &c));
     CHECK(!ParseCalendar("1d-ab-cd", &c));
-    CHECK(!ParseCalendar("0d-03-30", &c));        /* every zero days is nothing */
-    CHECK(!ParseCalendar("367d-03-30", &c));      /* past CAL_MAX_PERIOD_DAYS */
+    CHECK(!ParseCalendar("0d-03-30", &c));
+    CHECK(!ParseCalendar("367d-03-30", &c));
     CHECK(!ParseCalendar("xyz-03-30", &c));
     CHECK(!ParseCalendar("d-03-30", &c));
     CHECK(!ParseCalendar("sunday-03-00", &c));
     CHECK(!ParseCalendar("24h", &c));
 
-    /* intervals keep their phase: the deadline advances from the deadline, so
-       a task that wakes late does not carry that lateness into the next slot */
+    /* Late wakeups preserve the original interval phase */
     CHECK(IntervalAdvance(1000, 100, 1000) == 1100);
     CHECK(IntervalAdvance(1000, 100, 1050) == 1100);
-    /* a whole slot went by, so it is dropped rather than run back to back */
+    /* Missed slots are skipped rather than run back to back */
     CHECK(IntervalAdvance(1000, 100, 1150) == 1200);
     CHECK(IntervalAdvance(1000, 100, 5000) == 5100);
     CHECK(IntervalAdvance(1000, 0, 4242) == 4242);
 
-    /* the point of all of it: a thousand cycles, every one of them seven
-       nanoseconds late, and the phase has not moved */
+    /* Repeated lateness must not drift the phase */
     u64 dl = 1000;
     for(u32 cycle = 0; cycle < 1000; cycle++)
         dl = IntervalAdvance(dl, 100, dl + 7);
     CHECK(dl == 1000 + 1000 * 100);
 
-    /* falling far behind realigns to the grid instead of accumulating */
     dl = IntervalAdvance(1000, 100, 999999);
     CHECK(dl > 999999 && (dl - 1000) % 100 == 0);
 
-    /* 1970-01-01 was a Thursday */
     CHECK(LocalWeekday(0) == 4);
-    CHECK(LocalWeekday(3) == 0);                  /* 1970-01-04, a Sunday */
+    CHECK(LocalWeekday(3) == 0);
     CHECK(LocalDayNum(0, 0) == 0);
     CHECK(LocalDayNum(86400, 0) == 1);
     CHECK(LocalDaySec(3 * 3600 + 30 * 60, 0) == 3 * 3600 + 30 * 60);
     CHECK(LocalDaySec(0, 3 * 3600) == 3 * 3600);
-    /* west of UTC against an epoch clock would go negative */
     CHECK(LocalDaySec(0, -5 * 3600) == 0);
     CHECK(LocalDaySec(86400, -3600) == 23 * 3600);
 
     CalSpec everyday = { CAL_EVERY_NDAY, 1, 3600 };
     CHECK(SecsUntilCalendar(&everyday, 0, 0) == 3600);
-    /* landing on the target waits for the next one rather than refiring */
+    /* Exact matches advance to the next recurrence */
     CHECK(SecsUntilCalendar(&everyday, 3600, 0) == 86400);
     CHECK(SecsUntilCalendar(&everyday, 3601, 0) == 86400 - 1);
 
-    /* epoch-phased, so day 0 matches and the next is day 3 */
+    /* N-day recurrences are epoch-phased */
     CalSpec every3 = { CAL_EVERY_NDAY, 3, 0 };
     CHECK(SecsUntilCalendar(&every3, 1, 0) == 3 * 86400 - 1);
     CHECK(SecsUntilCalendar(&every3, 86400, 0) == 2 * 86400);
 
-    /* Sunday is day 3, so from day 0 at midnight that is three days out */
     CalSpec sun = { CAL_WEEKDAY, 0, 0 };
     CHECK(SecsUntilCalendar(&sun, 1, 0) == 3 * 86400 - 1);
     CHECK(SecsUntilCalendar(&sun, 3 * 86400, 0) == 7 * 86400);
@@ -224,8 +204,7 @@ static void TestNumbers(void)
     Fmt(out, sizeof(out), "%u %x %c%%", 42u, 255u, 'z');
     CHECK(StrEq(out, "42 ff z%"));
 
-    /* length modifiers have to stay distinguishable, or every %zu on a 32-bit
-     * target reads eight bytes off a four-byte argument */
+    /* %zu must not consume an eight-byte argument on 32-bit targets */
     Fmt(out, sizeof(out), "%llu", 4294967296ull);
     CHECK(StrEq(out, "4294967296"));
     Fmt(out, sizeof(out), "%zu|%lu", (usize)7, (unsigned long)8);
@@ -280,8 +259,6 @@ static void TestNames(void)
                          sizeof(storage[0]), tooLong));
 }
 
-/* ------------------------------------------------------------------- arena */
-
 static void TestArena(void)
 {
     GROUP("arena");
@@ -301,14 +278,11 @@ static void TestArena(void)
     ArenaReset(&a, mark);
     CHECK(ArenaMark(&a) == mark);
 
-    /* exhaustion is a defined, counted, non-fatal condition */
     CHECK(ArenaAlloc(&a, 1024, 1) == NULL);
     CHECK(a.exhaustions == 1);
     CHECK(ArenaAlloc(&a, 4, 1) != NULL);
     CHECK(a.peak >= a.used);
 }
-
-/* -------------------------------------------------------------------- ring */
 
 #define TEST_RING_SLOTS 8
 static u8 G_RING_MEM[sizeof(LogRing) + TEST_RING_SLOTS * LOG_SLOT_BYTES]
@@ -463,7 +437,6 @@ static void TestRing(void)
     CHECK((slot.flags & LOG_F_DISK) != 0);
     CHECK(!RingRead(r, &slot, &lost));
 
-    /* overflow drops the oldest, and says how many */
     for(u32 i = 0; i < TEST_RING_SLOTS + 3; i++)
     {
         char line[16];
@@ -480,7 +453,6 @@ static void TestRing(void)
     CHECK(seen == TEST_RING_SLOTS);
     CHECK(__atomic_load_n(&r->dropped, __ATOMIC_RELAXED) == 3);
 
-    /* an oversized line splits into flagged continuations rather than truncating */
     char big[LOG_TEXT_MAX * 2 + 10];
     memset(big, 'x', sizeof(big));
     RingWrite(r, LOG_SRC_OUT, 1, 0, big, sizeof(big));
@@ -562,8 +534,6 @@ static void TestRing(void)
 #endif
 }
 
-/* ------------------------------------------------------------------ status */
-
 static void TestStatus(void)
 {
     GROUP("status");
@@ -621,13 +591,10 @@ static void TestStatus(void)
     CHECK(!StatusRead(&status, &copy, &sequence));
 }
 
-/* ------------------------------------------------------------------- rules */
-
 static void TestRules(void)
 {
     GROUP("rules");
 
-    /* the shipped table is empty, so everything falls through to defaults */
     CHECK(TaskRuleFind("anything") == NULL);
 
     static const TaskRule rules[] =
@@ -650,7 +617,7 @@ static void TestRules(void)
     CHECK((r->flags & RULE_CRITICAL) != 0);
     CHECK(r->maxRestarts == 3);
 
-    /* inherit keeps the table sparse without sharing drop's value */
+    /* Inherit must remain distinct from drop */
     CHECK(r->probeIntervalNs == 0);
     CHECK(r->outPolicy == LOGP_INHERIT);
     CHECK(rules[1].outPolicy == LOGP_DROP);
@@ -674,13 +641,10 @@ static void TestRules(void)
     CHECK(LogPolicyResolve(LOGP_BOTH, CFG_STDOUT_POLICY) == LOGP_BOTH);
 }
 
-/* --------------------------------------------------------------- schedules */
-
 static void TestSchedules(void)
 {
     GROUP("schedules");
 
-    /* directory names are the whole schedule vocabulary */
     u64 ns = 0;
     CHECK(!ParseDuration("always", &ns));
     CHECK(!ParseDuration("once", &ns));
@@ -688,8 +652,6 @@ static void TestSchedules(void)
     CHECK(ParseDuration("24h", &ns) && ns == 86400ull * NS_PER_SEC);
     CHECK(!ParseDuration("hourly", &ns));
 }
-
-/* ----------------------------------------------------------------- backoff */
 
 static void TestBackoff(void)
 {
@@ -718,13 +680,11 @@ static void TestBackoff(void)
     CHECK(RestartFailuresNext(4, 0, 499, 500) == 5);
     CHECK(RestartFailuresNext(4, 0, 500, 500) == 0);
 
-    /* shipped probe timings put a restart past CFG_STABLE_NS, so consecFails resets */
+    /* Default probe timing must allow stable-run failure reset */
     u64 shippedProbeFailureNs = CFG_PROBE_GRACE_NS +
         (u64)(CFG_PROBE_FAIL_LIMIT - 1) * CFG_PROBE_INTERVAL_NS;
     CHECK(shippedProbeFailureNs > CFG_STABLE_NS);
 }
-
-/* ---------------------------------------------------------------- procstat */
 
 static void TestProcStat(void)
 {
@@ -740,7 +700,7 @@ static void TestProcStat(void)
     CHECK(ps.utime == 77 && ps.stime == 88);
     CHECK(ps.threads == 4);
 
-    /* comm can contain spaces and parens, so splitting starts at the last ')' */
+    /* comm may contain spaces and parentheses, parse from the final ')' */
     static const char nasty[] =
         "7 (weird ) name (x)) D 1 7 7 0 -1 0 0 0 0 0 "
         "11 22 0 0 20 0 2 0 5 0 0 0 0";
@@ -758,14 +718,11 @@ static void TestProcStat(void)
     CHECK(!ProcStatParse("garbage", 7, &ps));
 }
 
-/* -------------------------------------------------------------------- sntp */
-
 static void TestSntp(void)
 {
     GROUP("sntp");
 
-    /* Asserted through memory, so a target whose native order already matches
-     * the wire is held to the same result. */
+    /* Verify wire order independently of host endianness */
     u8 wire[4];
     u32 n32 = Hton32(0x01020304u);
     memcpy(wire, &n32, sizeof(n32));
@@ -808,42 +765,41 @@ static void TestSntp(void)
 
     u8 reply[SNTP_PKT_BYTES];
     memset(reply, 0, sizeof(reply));
-    reply[0] = 0x24;           /* LI 0, VN 4, mode 4 (server) */
-    reply[1] = 2;              /* stratum */
-    memcpy(&reply[24], &req[40], 8);   /* originate echoes our transmit */
-    memcpy(&reply[40], &req[40], 8);   /* server transmit */
+    reply[0] = 0x24;           /* SNTP v4 server reply */
+    reply[1] = 2;              /* stratum 2 */
+    memcpy(&reply[24], &req[40], 8);   /* Echo request transmit timestamp */
+    memcpy(&reply[40], &req[40], 8);   /* Server transmit timestamp */
 
     u64 got = 0;
     CHECK(SntpParseReply(reply, sizeof(reply), ntp, &got));
     CHECK(got / NS_PER_SEC == unixNs / NS_PER_SEC);
 
-    /* every rejection path bounds-checking untrusted input */
     CHECK(!SntpParseReply(reply, SNTP_PKT_BYTES - 1, ntp, &got));
 
     u8 bad[SNTP_PKT_BYTES];
 
     memcpy(bad, reply, sizeof(bad));
-    bad[1] = 0;                                  /* kiss-of-death */
+    bad[1] = 0;                                  /* Kiss-o'-Death */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
     memcpy(bad, reply, sizeof(bad));
-    bad[1] = 16;                                 /* stratum out of range */
+    bad[1] = 16;                                 /* Invalid stratum */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
     memcpy(bad, reply, sizeof(bad));
-    bad[0] = 0x23;                               /* mode 3, not a server reply */
+    bad[0] = 0x23;                               /* Client mode */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
     memcpy(bad, reply, sizeof(bad));
-    bad[0] = 0xe4;                               /* LI 3, unsynchronised */
+    bad[0] = 0xe4;                               /* Unsynchronized */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
     memcpy(bad, reply, sizeof(bad));
-    bad[0] = 0x0c;                               /* VN 1 */
+    bad[0] = 0x0c;                               /* NTPv1 */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
     memcpy(bad, reply, sizeof(bad));
-    memset(&bad[24], 0, 8);                      /* originate does not match */
+    memset(&bad[24], 0, 8);                      /* Mismatched originate timestamp */
     CHECK(!SntpParseReply(bad, sizeof(bad), ntp, &got));
 
 }

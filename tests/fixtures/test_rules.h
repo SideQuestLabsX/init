@@ -1,6 +1,3 @@
-/* Task rules for the boot tests, selected with
- * -DINIT_TASK_RULES_H='"tests/fixtures/test_rules.h"'. */
-
 static const TaskRule TASK_RULES[] =
 {
     { .name = "ok",
@@ -10,7 +7,7 @@ static const TaskRule TASK_RULES[] =
       .probeTimeoutNs = 3ull * NS_PER_SEC,
       .outPolicy = LOGP_BOTH },
 
-    /* three failures reaches FAILED in a few hundred milliseconds */
+    /* Reach FAILED within the boot harness timeout */
     { .name = "flap", .maxRestarts = 3 },
 
     { .name = "oneshot", .outPolicy = LOGP_BOTH },
@@ -23,8 +20,7 @@ static const TaskRule TASK_RULES[] =
 
     { .name = "signal_logd", .outPolicy = LOGP_BOTH },
 
-    /* a check that never exits: timeouts have to count as failures on their
-       own, or a probe that never reaps drops the task out of supervision */
+    /* Probe timeouts must count toward restart failure */
     { .name = "hangcheck",
       .graceNs = 100ull * NS_PER_MS,
       .probeIntervalNs = 200ull * NS_PER_MS,

@@ -1,9 +1,7 @@
 name: tests
 
-# Pinned on purpose: ubuntu-24.04 rather than ubuntu-latest, gcc-14 and clang-18
-# rather than the image defaults, actions/checkout by commit. Apt packages carry
-# no version: the archive drops superseded binaries, so an exact pin breaks the
-# day a security update lands. The image label is what fixes those versions.
+# Runner, compiler and checkout revisions are pinned
+# Apt packages follow the pinned Ubuntu archive because superseded versions disappear
 
 on:
   push:
@@ -21,7 +19,7 @@ jobs:
         include:
           - cc: gcc-14
             pkg: gcc-14
-          # the sanitizer runtime is only a Recommends of the clang packaging
+          # Clang lists the sanitizer runtime as Recommends
           - cc: clang-18
             pkg: clang-18 libclang-rt-18-dev
     steps:
@@ -69,8 +67,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install toolchain
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkgs }}
-      # Pins every hand-transcribed syscall number and ABI flag against this
-      # target's kernel headers. The freestanding build itself includes none.
       - name: abi check
         run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
       - name: build
@@ -123,8 +119,8 @@ jobs:
           if ! grep -q "^${user}:" /etc/subgid; then
             echo "${user}:100000:65536" | sudo tee -a /etc/subgid
           fi
-      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor;
-      # the harness skips cleanly if this does not take.
+      # Ubuntu 24.04 AppArmor restricts unprivileged user namespaces
+      # The harness reports a tier failure if this override fails
       - name: allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
@@ -178,7 +174,7 @@ jobs:
           kernel=$(find root/boot -name 'vmlinuz-*' -print -quit)
           test -n "$kernel"
           echo "KERNEL=$PWD/$kernel" >> "$GITHUB_ENV"
-      # TCG emulation, so the x86_64 job's 90s is not enough
+      # Aarch64 TCG needs a longer timeout than x86_64
       - name: run
         run: make test-qemu ARCH=aarch64 CC=aarch64-linux-gnu-gcc-14
         env:
