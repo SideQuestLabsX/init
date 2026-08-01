@@ -81,7 +81,7 @@ LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecst
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-config-overrides test-ns test-qemu test-variant test-variants abi-check fixtures status-reader allarch help
+.PHONY: all clean check check-all test test-config-overrides test-ns test-faults test-qemu test-variant test-variants abi-check fixtures status-reader allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -183,6 +183,13 @@ test-ns:
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_NS_REMOUNT_TEST=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	@if [ "$(INIT_NS_TIER)" != auto ]; then \
+		$(MAKE) --no-print-directory ARCH=$(ARCH) NS_BUILD=$(NS_BUILD) test-faults; \
+	fi
+
+test-faults:
+	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 all fixtures
+	ARCH=$(ARCH) sh tools/run-fault-tests.sh "$(NS_BUILD)"
 
 check: test abi-check all test-ns test-qemu
 
@@ -275,6 +282,7 @@ help:
 	@echo "make test                           host unit tests"
 	@echo "make abi-check ARCH=...             verify syscall numbers"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
+	@echo "make test-faults                    fault-injected child and clock tests"
 	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"
 	@echo "make test-qemu ARCH=x86|x86_64|aarch64  boot test under qemu"
 	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"

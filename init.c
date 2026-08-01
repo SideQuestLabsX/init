@@ -2392,11 +2392,21 @@ static inline isize SysSchedYield(void)
 
 /* syscall helpers */
 
+#if !defined(INIT_FIXTURE)
+NORETURN void InitPanic(const char *msg);
+#endif
+
 static inline u64 SysNow(i32 clk)
 {
     KTimeSpec ts = { 0, 0 };
     if(SysClockGetTime(clk, &ts) < 0)
+    {
+#if defined(INIT_FIXTURE)
         return 0;
+#else
+        InitPanic("clock_gettime failed");
+#endif
+    }
     return (u64)ts.sec * NS_PER_SEC + (u64)ts.nsec;
 }
 
@@ -2856,16 +2866,14 @@ i32 SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t)
     ChildPrepare();
 
     isize devNull = SysOpen("/dev/null", O_RDWR, 0);
-    if(devNull >= 0)
-    {
-        ChildDup("dup3 stdin", (i32)devNull, 0);
-        if(outFd < 0)
-            ChildDup("dup3 stdout", (i32)devNull, 1);
-        if(errFd < 0)
-            ChildDup("dup3 stderr", (i32)devNull, 2);
-        if(devNull > 2)
-            SysClose((i32)devNull);
-    }
+    ChildCheck("open /dev/null", devNull);
+    ChildDup("dup3 stdin", (i32)devNull, 0);
+    if(outFd < 0)
+        ChildDup("dup3 stdout", (i32)devNull, 1);
+    if(errFd < 0)
+        ChildDup("dup3 stderr", (i32)devNull, 2);
+    if(devNull > 2)
+        SysClose((i32)devNull);
     if(outFd >= 0)
         ChildDup("dup3 stdout", outFd, 1);
     if(errFd >= 0)
@@ -4487,7 +4495,6 @@ NO_SSP void InitSelfRelocate(usize base)
 
 /* panic */
 
-NORETURN void InitPanic(const char *msg);
 NORETURN void __stack_chk_fail(void);
 
 extern usize __stack_chk_guard;
