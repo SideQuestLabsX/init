@@ -1,10 +1,5 @@
 #include "fixture.h"
 
-#ifndef FIXTURE_SETTLE_NS
-  /* Allow both log-writer replacements to finish */
-  #define FIXTURE_SETTLE_NS (12ull * NS_PER_SEC)
-#endif
-
 static bool FileExists(const char *path)
 {
     isize fd = SysOpen(path, O_RDONLY | O_CLOEXEC, 0);
@@ -13,6 +8,40 @@ static bool FileExists(const char *path)
     SysClose((i32)fd);
     return true;
 }
+
+#if FEATURE_EXEC_PROBES
+static bool FileContains(const char *path, const char *needle)
+{
+    isize fd = SysOpen(path, O_RDONLY | O_CLOEXEC, 0);
+    if(fd < 0)
+        return false;
+
+    usize matched = 0;
+    usize needleLen = StrLen(needle);
+    char buf[256];
+    for(;;)
+    {
+        isize n = SysRead((i32)fd, buf, sizeof(buf));
+        if(n <= 0)
+            break;
+        for(isize i = 0; i < n; i++)
+        {
+            if(buf[i] == needle[matched])
+                matched++;
+            else
+                matched = buf[i] == needle[0] ? 1u : 0u;
+            if(matched == needleLen)
+            {
+                SysClose((i32)fd);
+                return true;
+            }
+        }
+    }
+
+    SysClose((i32)fd);
+    return false;
+}
+#endif
 
 static bool WaitForFile(const char *path, usize attempts)
 {
@@ -25,7 +54,7 @@ static bool WaitForFile(const char *path, usize attempts)
     return false;
 }
 
-#if !defined(FIXTURE_CAPTURE_DISABLED) && !defined(FIXTURE_LOG_DISK_DISABLED)
+#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK
 static void MatchMarker(char c, const char *marker, usize *matched, bool *bFound)
 {
     if(c == marker[*matched])
@@ -88,6 +117,56 @@ static bool VerifyInterleavedLog(void)
     SysClose((i32)fd);
     return bReconstructed && !bMerged;
 }
+
+static bool WaitForLogCompletion(void)
+{
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS; i++)
+    {
+        if(FileExists("/dev/log-interleave-complete") &&
+           VerifyInterleavedLog())
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return false;
+}
+#endif
+
+#if FEATURE_EXEC_PROBES
+static bool WaitForConsoleCompletion(void)
+{
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS; i++)
+    {
+        if(FileContains("/dev/console", "stable: done") &&
+           FileContains("/dev/console", "flap: FAILED after") &&
+           FileContains("/dev/console", "FIXTURE tick fired") &&
+           FileContains("/dev/console", "probefail: FAILED after") &&
+           FileContains("/dev/console", "hangcheck: FAILED after") &&
+           FileContains("/dev/console", "midprobe: cancelling probe") &&
+           FileContains("/dev/console", "ignoreterm: restart grace expired") &&
+           FileContains("/dev/console", "FIXTURE tree replacement started"))
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return false;
+}
+#endif
+
+#if !FEATURE_EXEC_PROBES && FEATURE_WATCHDOG
+static bool WaitForWatchdogPets(void)
+{
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS * 2u; i++)
+    {
+        isize fd = SysOpen("/dev/watchdog", O_RDONLY | O_CLOEXEC, 0);
+        if(fd < 0)
+            return true;
+        isize size = SysLseek((i32)fd, 0, SEEK_END);
+        SysClose((i32)fd);
+        if(size < 0 || size >= 3)
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return false;
+}
 #endif
 
 static void DumpLog(void)
@@ -123,21 +202,31 @@ static void DumpLog(void)
 void FixtureMain(void)
 {
     FixtureSay("FIXTURE selftest waiting");
-    FixtureSleep(FIXTURE_SETTLE_NS);
 
+#if FEATURE_LOG_DISK
     if(FileExists("/var/log/logd-fixture-expected") &&
-       !WaitForFile("/var/log/logd-fixture-done", 80))
+       !WaitForFile("/var/log/logd-fixture-done", FIXTURE_WAIT_ATTEMPTS * 2u))
         FixtureSay("FIXTURE log writer fixture incomplete");
+#endif
 
-#if !defined(FIXTURE_CAPTURE_DISABLED) && !defined(FIXTURE_LOG_DISK_DISABLED)
+#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK
     if(!FileExists("/dev/log-symlink-test"))
     {
-        if(WaitForFile("/dev/log-interleave-complete", 40) &&
-           VerifyInterleavedLog())
+        if(WaitForLogCompletion())
             FixtureSay("FIXTURE interleaved log verified");
         else
             FixtureSay("FIXTURE interleaved log invalid");
     }
+#endif
+
+#if FEATURE_EXEC_PROBES
+    if(FileExists("/dev/log-symlink-test") && !WaitForConsoleCompletion())
+        FixtureSay("FIXTURE console completion incomplete");
+#endif
+
+#if !FEATURE_EXEC_PROBES && FEATURE_WATCHDOG
+    if(!WaitForWatchdogPets())
+        FixtureSay("FIXTURE watchdog completion incomplete");
 #endif
 
     DumpLog();

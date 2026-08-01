@@ -236,7 +236,7 @@ test-variant:
 	extra="-U$$k -D$$v"; \
 	fixture_extra=; \
 	if [ "$$v" = FEATURE_EXEC_PROBES=0 ]; then \
-		fixture_extra="-DFIXTURE_SETTLE_NS=25000000000ull"; \
+		fixture_extra="-UFEATURE_EXEC_PROBES -DFEATURE_EXEC_PROBES=0"; \
 	fi; \
 	if [ "$$v" = FEATURE_LOG_CAPTURE=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1"; \

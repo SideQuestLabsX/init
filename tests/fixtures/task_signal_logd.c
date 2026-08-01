@@ -102,6 +102,38 @@ static bool LogContains(const char *needle)
     return false;
 }
 
+static bool LogMarkersReady(bool bWriterTransitions)
+{
+    if(!LogContains("ok-stderr-line") ||
+       !LogContains("flap-dying") ||
+       !LogContains("partial-stdout-line") ||
+       !LogContains("LOGEDGE-HEAD") ||
+       !LogContains("LOGEDGE-B1") ||
+       !LogContains("LOGEDGE-B2") ||
+       !LogContains("LOGINTERLEAVE-A-BEGIN") ||
+       !LogContains("LOGINTERLEAVE-A-END") ||
+       !LogContains("LOGINTERLEAVE-B"))
+        return false;
+    if(!bWriterTransitions)
+        return true;
+#if FEATURE_EXEC_PROBES
+    if(!LogContains("probefail: FAILED after"))
+        return false;
+#endif
+    return true;
+}
+
+static bool WaitForLogMarkers(bool bWriterTransitions)
+{
+    for(usize attempt = 0; attempt < FIXTURE_WAIT_ATTEMPTS; attempt++)
+    {
+        if(LogMarkersReady(bWriterTransitions))
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
+    return false;
+}
+
 static bool WaitForPartialLine(void)
 {
     for(usize attempt = 0; attempt < 12; attempt++)
@@ -128,6 +160,14 @@ void FixtureMain(void)
     if(!WaitForPartialLine())
     {
         FixtureSay("FIXTURE partial line was not persisted");
+        SysExit(1);
+    }
+#endif
+
+#ifndef FIXTURE_CAPTURE_DISABLED
+    if(!WaitForLogMarkers(false))
+    {
+        FixtureSay("FIXTURE initial log markers missing");
         SysExit(1);
     }
 #endif
@@ -165,6 +205,15 @@ void FixtureMain(void)
         SysExit(1);
     }
     FixtureSay("FIXTURE stalled log writer replaced");
+
+#ifndef FIXTURE_CAPTURE_DISABLED
+    if(!WaitForLogMarkers(true))
+    {
+        FixtureSay("FIXTURE final log markers missing");
+        SysExit(1);
+    }
+#endif
+
     if(!Touch("/var/log/logd-fixture-done"))
     {
         FixtureSay("FIXTURE log writer completion failed");

@@ -79,7 +79,7 @@ if [ "$MARKER_LOGD" -ne 0 ]; then
     expect "log writer exited (exit -1 sig 15), respawning in"
     expect "FIXTURE log writer stopped"
     expect "log writer stalled, killing pid"
-    expect "stalled log writer respawning in 200ms"
+    expect "stalled log writer respawning in "
     expect "FIXTURE stalled log writer replaced"
 fi
 

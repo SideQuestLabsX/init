@@ -3,6 +3,10 @@
 
 #include "init.c"
 
+#ifndef FIXTURE_WAIT_ATTEMPTS
+  #define FIXTURE_WAIT_ATTEMPTS 80u
+#endif
+
 /* libgcc's ARM division helper requires the libc raise ABI */
 #if defined(__arm__)
 int raise(int sig)
