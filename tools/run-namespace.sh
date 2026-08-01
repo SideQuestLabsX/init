@@ -153,13 +153,16 @@ if [ "$remount_test" -ne 0 ]; then
     fi
     MOUNT_TRACE="$BUILD/ns-mount.trace"
     rm -f "$MOUNT_TRACE"
+    # newuidmap rejects a target already controlled by ptrace
     if [ "$ns_tier" = auto ]; then
-        timeout "$TIMEOUT" strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
-            unshare --map-auto --map-root-user --mount --pid --fork \
+        timeout "$TIMEOUT" unshare --map-auto --map-root-user --mount \
+            strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
+            unshare --pid --fork \
             sh tools/run-namespace-remount.sh "$STAGE" > "$LOG" 2>&1
     else
-        timeout "$TIMEOUT" strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
-            unshare --user --map-root-user --mount --pid --fork \
+        timeout "$TIMEOUT" unshare --user --map-root-user --mount \
+            strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
+            unshare --pid --fork \
             sh tools/run-namespace-remount.sh "$STAGE" > "$LOG" 2>&1
     fi
 elif [ "$ns_tier" = auto ]; then
