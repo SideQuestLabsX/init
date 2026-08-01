@@ -574,6 +574,8 @@ static void TestStatus(void)
     memset(&status, 0, sizeof(status));
     memset(&source, 0, sizeof(source));
     memset(&copy, 0, sizeof(copy));
+    StatusSeq sequence = 0;
+    CHECK(!StatusRead(&status, &copy, &sequence));
 
     source.magic = STATUS_MAGIC;
     source.version = STATUS_VERSION;
@@ -586,7 +588,6 @@ static void TestStatus(void)
     source.task[0].consecFails = 3;
 
     StatusPublish(&status, &source);
-    StatusSeq sequence = 0;
     CHECK(StatusRead(&status, &copy, &sequence));
     CHECK(sequence != 0 && (sequence & 1u) == 0);
     CHECK(copy.magic == STATUS_MAGIC && copy.version == STATUS_VERSION);
@@ -595,6 +596,26 @@ static void TestStatus(void)
     CHECK(StrEq(copy.task[0].name, "flap"));
     CHECK(copy.task[0].state == TS_FAILED);
     CHECK(copy.task[0].runs == 3 && copy.task[0].consecFails == 3);
+
+    StatusPublish(&status, &source);
+    CHECK(__atomic_load_n(&status.sequence, __ATOMIC_RELAXED) == sequence);
+
+    source.task[0].runs = 4;
+    StatusPublish(&status, &source);
+    CHECK(StatusRead(&status, &copy, &sequence));
+    CHECK(copy.task[0].runs == 4);
+
+    __atomic_store_n(&status.sequence, ~(StatusSeq)1, __ATOMIC_RELAXED);
+    source.task[0].runs = 5;
+    StatusPublish(&status, &source);
+    CHECK(StatusRead(&status, &copy, &sequence));
+    CHECK(sequence == 2 && copy.task[0].runs == 5);
+
+    __atomic_store_n(&status.sequence, ~(StatusSeq)0, __ATOMIC_RELAXED);
+    source.task[0].runs = 6;
+    StatusPublish(&status, &source);
+    CHECK(StatusRead(&status, &copy, &sequence));
+    CHECK(sequence == 2 && copy.task[0].runs == 6);
 
     __atomic_store_n(&status.sequence, sequence + 1, __ATOMIC_RELAXED);
     CHECK(!StatusRead(&status, &copy, &sequence));

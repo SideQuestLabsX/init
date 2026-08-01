@@ -2094,19 +2094,37 @@ typedef struct
 static void StatusPublish(StatusBlock *status, const StatusSnapshot *snapshot)
 {
     StatusSeq sequence = __atomic_load_n(&status->sequence, __ATOMIC_RELAXED);
+    if(sequence != 0 && (sequence & 1u) == 0)
+    {
+        bool bSame = true;
+        for(usize i = 0; i < STATUS_PAYLOAD_WORDS; i++)
+        {
+            StatusSeq word;
+            memcpy(&word, (const u8 *)snapshot + i * sizeof(word), sizeof(word));
+            if(__atomic_load_n(&status->payload[i], __ATOMIC_RELAXED) != word)
+            {
+                bSame = false;
+                break;
+            }
+        }
+        if(bSame)
+            return;
+    }
     if((sequence & 1u) != 0)
         sequence++;
+    StatusSeq nextSequence = sequence + 2;
+    if(nextSequence == 0)
+        nextSequence = 2;
 
-    __atomic_store_n(&status->sequence, sequence + 1, __ATOMIC_RELAXED);
-    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    __atomic_store_n(&status->sequence, nextSequence - 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
     for(usize i = 0; i < STATUS_PAYLOAD_WORDS; i++)
     {
         StatusSeq word;
         memcpy(&word, (const u8 *)snapshot + i * sizeof(word), sizeof(word));
         __atomic_store_n(&status->payload[i], word, __ATOMIC_RELAXED);
     }
-    __atomic_thread_fence(__ATOMIC_RELEASE);
-    __atomic_store_n(&status->sequence, sequence + 2, __ATOMIC_RELAXED);
+    __atomic_store_n(&status->sequence, nextSequence, __ATOMIC_RELEASE);
 }
 #endif
 
@@ -2115,7 +2133,7 @@ static bool StatusRead(const StatusBlock *status, StatusSnapshot *snapshot,
                        StatusSeq *sequenceOut)
 {
     StatusSeq before = __atomic_load_n(&status->sequence, __ATOMIC_ACQUIRE);
-    if((before & 1u) != 0)
+    if(before == 0 || (before & 1u) != 0)
         return false;
 
     for(usize i = 0; i < STATUS_PAYLOAD_WORDS; i++)
@@ -2125,7 +2143,7 @@ static bool StatusRead(const StatusBlock *status, StatusSnapshot *snapshot,
     }
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
     StatusSeq after = __atomic_load_n(&status->sequence, __ATOMIC_RELAXED);
-    if(before != after || (after & 1u) != 0)
+    if(before != after || after == 0 || (after & 1u) != 0)
         return false;
 
     *sequenceOut = after;
