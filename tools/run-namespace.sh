@@ -104,6 +104,7 @@ sntp_fixture=1
 log_symlink=${INIT_LOG_SYMLINK:-0}
 status_reader=${INIT_STATUS_READER:-0}
 status_fallback=${INIT_STATUS_FALLBACK:-0}
+remount_test=${INIT_NS_REMOUNT_TEST:-0}
 case "${FEATURE_VARIANT:-}" in
     OFFLINE_MODE=1)
         sntp_fixture=0
@@ -153,7 +154,23 @@ if [ "$ns_tier" = caps ]; then
 fi
 echo "booting $BUILD/init as namespace PID 1"
 set +e
-if [ "$ns_tier" = auto ]; then
+if [ "$remount_test" -ne 0 ]; then
+    if ! command -v strace >/dev/null 2>&1; then
+        echo "SKIP: strace is required for the remount test"
+        exit 0
+    fi
+    MOUNT_TRACE="$BUILD/ns-mount.trace"
+    rm -f "$MOUNT_TRACE"
+    if [ "$ns_tier" = auto ]; then
+        timeout "$TIMEOUT" strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
+            unshare --map-auto --map-root-user --mount --pid --fork \
+            sh tools/run-namespace-remount.sh "$STAGE" > "$LOG" 2>&1
+    else
+        timeout "$TIMEOUT" strace -f -qq -s 8192 -e trace=mount -o "$MOUNT_TRACE" \
+            unshare --user --map-root-user --mount --pid --fork \
+            sh tools/run-namespace-remount.sh "$STAGE" > "$LOG" 2>&1
+    fi
+elif [ "$ns_tier" = auto ]; then
     timeout "$TIMEOUT" unshare --map-auto --map-root-user --mount --pid --fork \
         chroot "$STAGE" /init > "$LOG" 2>&1
 else
@@ -201,6 +218,50 @@ if [ "$status_fallback" -ne 0 ] && [ -e "$STAGE/run/init.status" ]; then
     fail=1
 fi
 . "${BOOT_MARKERS:-tools/boot-markers.sh}"
+
+if [ "$remount_test" -ne 0 ]; then
+    if awk '
+        index($0, "MS_REMOUNT") && index($0, "/remount-test/") {
+            path = $0
+            sub(/^.*mount\(NULL, "/, "", path)
+            sub(/".*$/, "", path)
+            depth = gsub(/\//, "/", path)
+            testCount++
+            if(bSeen && depth > previousDepth)
+                bBadOrder = 1
+            previousDepth = depth
+            bSeen = 1
+            if(index(path, "/early/a/b"))
+                earlyLine = earlyLine ? -1 : NR
+            if(index(path, "/shallow"))
+                shallowLine = shallowLine ? -1 : NR
+            if(index(path, "zz_deepest"))
+                deepestCount++
+            if(index(path, "/space path"))
+                decodedCount++
+            leaf = path
+            sub(/^.*\//, "", leaf)
+            if(leaf ~ /^d[0-9][0-9]_/) {
+                id = substr(leaf, 2, 2) + 0
+                chain[id]++
+            }
+        }
+        END {
+            for(i = 0; i < 48; i++) {
+                if(chain[i] != 1)
+                    bBadChain = 1
+            }
+            exit !(testCount == 52 && deepestCount == 1 && decodedCount == 1 &&
+                   earlyLine > 0 && shallowLine > 0 && earlyLine < shallowLine &&
+                   !bBadOrder && !bBadChain)
+        }
+    ' "$MOUNT_TRACE"; then
+        echo "  ok    complete deepest-first remount attempts"
+    else
+        echo "  BAD   incomplete or unordered remount attempts"
+        fail=1
+    fi
+fi
 
 if [ "$log_symlink" -ne 0 ]; then
     if [ -L "$STAGE/var/log/init.log" ] &&

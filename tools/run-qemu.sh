@@ -14,8 +14,16 @@ ARCH="${ARCH:-x86_64}"
 BUILD="${BUILD:-build/$ARCH}"
 TIMEOUT="${TIMEOUT:-90}"
 LOG="$BUILD/qemu-console.log"
+KERNEL="${KERNEL:-}"
 
 case "$ARCH" in
+    x86)
+        if [ -z "$KERNEL" ]; then
+            echo "SKIP: x86 boot requires a 32-bit kernel; set KERNEL=/path/to/vmlinuz"
+            exit 0
+        fi
+        QEMU=qemu-system-i386; MACHINE="-machine q35"; CONSOLE=ttyS0
+        ;;
     x86_64) QEMU=qemu-system-x86_64; MACHINE="-machine q35"; CONSOLE=ttyS0 ;;
     aarch64) QEMU=qemu-system-aarch64; MACHINE="-machine virt -cpu cortex-a57"; CONSOLE=ttyAMA0 ;;
     *) echo "SKIP: no qemu boot test for ARCH=$ARCH"; exit 0 ;;
@@ -30,7 +38,6 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-KERNEL="${KERNEL:-}"
 if [ -z "$KERNEL" ]; then
     for candidate in "/boot/vmlinuz-$(uname -r)" /boot/vmlinuz /boot/vmlinuz-*; do
         if [ -r "$candidate" ]; then

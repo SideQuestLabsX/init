@@ -170,7 +170,7 @@ $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
                      tests/fixtures/fixture.h init.c $(CONFIG_DEPS) | $(BUILD)
 	@mkdir -p $(BUILD)/fixtures
 	$(CC) $(FIXTURE_CFLAGS) $< tests/fixtures/fstart.S -o $@ \
-	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
+	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 STATUS_READER := $(BUILD)/init-status
 STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
@@ -205,6 +205,8 @@ test-ns:
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_STATUS_FALLBACK=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_NS_REMOUNT_TEST=1 \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 check: test abi-check all test-ns test-qemu
 
@@ -213,31 +215,34 @@ FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
                     FEATURE_CAPABILITY_DROP=0
 
-CHECK_CC_x86_64     ?= gcc
-CHECK_CC_x86        ?= gcc
-CHECK_CC_aarch64    ?= aarch64-linux-gnu-gcc
-CHECK_CC_armv7      ?= arm-linux-gnueabihf-gcc
-CHECK_CC_armv6      ?= arm-linux-gnueabihf-gcc
-CHECK_CC_riscv64    ?= riscv64-linux-gnu-gcc
-CHECK_CC_loongarch64 ?= loongarch64-linux-gnu-gcc-14
-CHECK_CC_mips       ?= mips-linux-gnu-gcc
-CHECK_CC_mipsel     ?= mipsel-linux-gnu-gcc
+CC_x86_64      ?= gcc
+CC_x86         ?= gcc
+CC_aarch64     ?= aarch64-linux-gnu-gcc
+CC_armv7       ?= arm-linux-gnueabihf-gcc
+CC_armv6       ?= arm-linux-gnueabihf-gcc
+CC_riscv64     ?= riscv64-linux-gnu-gcc
+CC_loongarch64 ?= loongarch64-linux-gnu-gcc-14
+CC_mips        ?= mips-linux-gnu-gcc
+CC_mipsel      ?= mipsel-linux-gnu-gcc
+
+ARCH_CC_SPECS := \
+	"x86_64:$(CC_x86_64)" "x86:$(CC_x86)" \
+	"aarch64:$(CC_aarch64)" "armv7:$(CC_armv7)" "armv6:$(CC_armv6)" \
+	"riscv64:$(CC_riscv64)" "loongarch64:$(CC_loongarch64)" \
+	"mips:$(CC_mips)" "mipsel:$(CC_mipsel)"
 
 check-all: check
 	@set -e; \
-	for spec in \
-	  x86_64:$(CHECK_CC_x86_64) x86:$(CHECK_CC_x86) \
-	  aarch64:$(CHECK_CC_aarch64) armv7:$(CHECK_CC_armv7) armv6:$(CHECK_CC_armv6) \
-	  riscv64:$(CHECK_CC_riscv64) loongarch64:$(CHECK_CC_loongarch64) \
-	  mips:$(CHECK_CC_mips) mipsel:$(CHECK_CC_mipsel); do \
+	for spec in $(ARCH_CC_SPECS); do \
 		arch=$${spec%%:*}; cc=$${spec#*:}; \
-		if ! command -v "$$cc" >/dev/null 2>&1; then \
+		cc_bin=$${cc%% *}; \
+		if ! command -v "$$cc_bin" >/dev/null 2>&1; then \
 			echo "SKIP: $$arch compiler $$cc not installed"; \
 			continue; \
 		fi; \
 		echo "=== check $$arch with $$cc"; \
 		$(MAKE) --no-print-directory ARCH=$$arch BUILD=build/check-$$arch \
-		        CC=$$cc abi-check all status-reader; \
+		        CC="$$cc" abi-check all status-reader; \
 	done
 	@$(MAKE) --no-print-directory test-variants
 
@@ -274,8 +279,16 @@ test-variants:
 	@rm -rf build/var
 
 allarch:
-	@for a in $(ARCHES); do \
-	  echo "=== $$a"; $(MAKE) --no-print-directory ARCH=$$a all || exit 1; \
+	@set -e; \
+	for spec in $(ARCH_CC_SPECS); do \
+	  arch=$${spec%%:*}; cc=$${spec#*:}; \
+	  cc_bin=$${cc%% *}; \
+	  if ! command -v "$$cc_bin" >/dev/null 2>&1; then \
+	    echo "SKIP: $$arch compiler $$cc not installed"; \
+	    continue; \
+	  fi; \
+	  echo "=== build $$arch with $$cc"; \
+	  $(MAKE) --no-print-directory ARCH=$$arch CC="$$cc" all; \
 	done
 
 clean:
@@ -288,9 +301,9 @@ help:
 	@echo "make abi-check ARCH=...             verify syscall numbers"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
 	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"
-	@echo "make test-qemu ARCH=x86_64|aarch64  boot test under qemu"
+	@echo "make test-qemu ARCH=x86|x86_64|aarch64  boot test under qemu"
 	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"
 	@echo "make test-variants                  test every disabled feature"
 	@echo "make check                          everything runnable here"
 	@echo "make check-all                      every installed toolchain and variant"
-	@echo "make allarch                        build every target"
+	@echo "make allarch                        build every installed target"

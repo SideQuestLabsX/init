@@ -115,7 +115,7 @@ jobs:
       - name: install compiler and uid mapping helpers
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-14 uidmap
+          sudo apt-get install -y gcc-14 strace uidmap
           user=$(id -un)
           if ! grep -q "^${user}:" /etc/subuid; then
             echo "${user}:100000:65536" | sudo tee -a /etc/subuid

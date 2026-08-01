@@ -114,6 +114,9 @@ static void TestNumbers(void)
     CHECK(ParseDuration("5m", &ns) && ns == 300ull * NS_PER_SEC);
     CHECK(ParseDuration("24h", &ns) && ns == 86400ull * NS_PER_SEC);
     CHECK(ParseDuration("7d", &ns) && ns == 604800ull * NS_PER_SEC);
+    CHECK(ParseDuration("366d", &ns) && ns == 366ull * 86400ull * NS_PER_SEC);
+    CHECK(!ParseDuration("367d", &ns));
+    CHECK(!ParseDuration("31622400001ms", &ns));
     CHECK(!ParseDuration("7w", &ns));
     CHECK(!ParseDuration("weekly", &ns));
     CHECK(!ParseDuration("18446744073709551615d", &ns));
@@ -231,6 +234,11 @@ static void TestNumbers(void)
     CHECK(StrEq(out, "-4294967296"));
     Fmt(out, sizeof(out), "%u", 4294967295u);
     CHECK(StrEq(out, "4294967295"));
+
+    char trailingPercent[] = "%";
+    CHECK(Fmt(out, sizeof(out), trailingPercent) == 0 && StrEq(out, ""));
+    char trailingModifier[] = "abc%ll";
+    CHECK(Fmt(out, sizeof(out), trailingModifier) == 3 && StrEq(out, "abc"));
 
     char tiny[5];
     Fmt(tiny, sizeof(tiny), "%s", "abcdefgh");

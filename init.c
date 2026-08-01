@@ -1057,7 +1057,10 @@ bool ParseDuration(const char *s, u64 *outNs)
 
     if(v != 0 && v > 0xffffffffffffffffull / mult)
         return false;
-    *outNs = v * mult;
+    u64 ns = v * mult;
+    if(ns > (u64)CAL_MAX_PERIOD_DAYS * 86400ull * NS_PER_SEC)
+        return false;
+    *outNs = ns;
     return true;
 }
 
@@ -1313,6 +1316,8 @@ usize FmtV(char *dst, usize cap, const char *fmt, va_list ap)
             mod = (fmt[i] == 'z') ? 1 : (mod >= 1 ? 2 : 1);
             i++;
         }
+        if(fmt[i] == '\0')
+            break;
 
         switch(fmt[i])
         {
@@ -2159,10 +2164,12 @@ static inline isize SysCall6(isize n, isize a, isize b, isize c, isize d, isize 
 {
     isize ret;
     __asm__ volatile(
+        "push %[argf]\n\t"
         "push %%ebp\n\t"
-        "mov %[argf], %%ebp\n\t"
+        "mov 4(%%esp), %%ebp\n\t"
         "int $0x80\n\t"
-        "pop %%ebp"
+        "pop %%ebp\n\t"
+        "add $4, %%esp"
         : "=a"(ret)
         : "a"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e), [argf] "rm"(f)
         : "memory");
@@ -4910,9 +4917,15 @@ void StatusInit(StatusBlock *status, StatusSnapshot *snapshot)
 
 /* --------------------------------------------------------------- shutdown */
 
-static void RemountReadOnly(void)
+static void RemountReadOnly(Arena *arena)
 {
-    char mounts[4096];
+    typedef struct
+    {
+        char *path;
+        usize depth;
+    } MountPoint;
+
+    usize arenaMark = ArenaMark(arena);
     isize fd = SysOpen("/proc/self/mounts", O_RDONLY | O_CLOEXEC, 0);
     if(fd < 0)
     {
@@ -4920,22 +4933,63 @@ static void RemountReadOnly(void)
         return;
     }
 
-    isize n = SysRead((i32)fd, mounts, sizeof(mounts) - 1);
-    SysClose((i32)fd);
-    if(n <= 0)
-        return;
-    mounts[n] = '\0';
+    char *mounts = NULL;
+    usize mountsLen = 0;
+    bool bComplete = true;
+    for(;;)
+    {
+        usize chunkMark = ArenaMark(arena);
+        char *chunk = (char *)ArenaAlloc(arena, 4096, 1);
+        if(chunk == NULL)
+        {
+            bComplete = false;
+            break;
+        }
 
-    char *point[32];
+        isize n = SysRead((i32)fd, chunk, 4096);
+        if(n == -EINTR)
+        {
+            ArenaReset(arena, chunkMark);
+            continue;
+        }
+        if(n < 0)
+        {
+            ArenaReset(arena, chunkMark);
+            bComplete = false;
+            break;
+        }
+        if(n == 0)
+        {
+            ArenaReset(arena, chunkMark);
+            break;
+        }
+
+        if(mounts == NULL)
+            mounts = chunk;
+        mountsLen += (usize)n;
+        ArenaReset(arena, chunkMark + (usize)n);
+    }
+    SysClose((i32)fd);
+
+    char *terminator = (char *)ArenaAlloc(arena, 1, 1);
+    if(!bComplete || mounts == NULL || terminator == NULL)
+    {
+        ArenaReset(arena, arenaMark);
+        SysMount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL);
+        return;
+    }
+    *terminator = '\0';
+
+    MountPoint *point = NULL;
     usize count = 0;
     usize i = 0;
 
-    while(i < (usize)n && count < ARRAY_LEN(point))
+    while(i < mountsLen)
     {
         usize lineStart = i;
-        while(i < (usize)n && mounts[i] != '\n')
+        while(i < mountsLen && mounts[i] != '\n')
             i++;
-        if(i < (usize)n)
+        if(i < mountsLen)
             mounts[i++] = '\0';
 
         char *field[3] = { NULL, NULL, NULL };
@@ -4962,12 +5016,68 @@ static void RemountReadOnly(void)
            StrEq(fs, "cgroup2") || StrEq(fs, "debugfs") || StrEq(fs, "rootfs"))
             continue;
 
-        point[count++] = field[1];
+        char *path = field[1];
+        usize read = 0;
+        usize write = 0;
+        while(path[read] != '\0')
+        {
+            if(path[read] == '\\' && path[read + 1] >= '0' && path[read + 1] <= '7' &&
+               path[read + 2] >= '0' && path[read + 2] <= '7' &&
+               path[read + 3] >= '0' && path[read + 3] <= '7')
+            {
+                path[write++] = (char)(((path[read + 1] - '0') << 6) |
+                                       ((path[read + 2] - '0') << 3) |
+                                       (path[read + 3] - '0'));
+                read += 4;
+            }
+            else
+            {
+                path[write++] = path[read++];
+            }
+        }
+        path[write] = '\0';
+
+        MountPoint *entry = (MountPoint *)ArenaAlloc(arena, sizeof(*entry),
+                                                      sizeof(void *));
+        if(entry == NULL)
+        {
+            ArenaReset(arena, arenaMark);
+            SysMount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL);
+            return;
+        }
+        if(point == NULL)
+            point = entry;
+        entry->path = path;
+        entry->depth = 0;
+        for(usize k = 0; path[k] != '\0'; k++)
+        {
+            if(path[k] == '/' && path[k + 1] != '\0')
+                entry->depth++;
+        }
+        count++;
     }
 
-    /* deepest mounts first */
-    for(usize k = count; k > 0; k--)
-        SysMount(NULL, point[k - 1], NULL, MS_REMOUNT | MS_RDONLY, NULL);
+    if(count == 0)
+    {
+        ArenaReset(arena, arenaMark);
+        SysMount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL);
+        return;
+    }
+
+    for(usize k = 1; k < count; k++)
+    {
+        MountPoint current = point[k];
+        usize pos = k;
+        while(pos > 0 && point[pos - 1].depth < current.depth)
+        {
+            point[pos] = point[pos - 1];
+            pos--;
+        }
+        point[pos] = current;
+    }
+
+    for(usize k = 0; k < count; k++)
+        SysMount(NULL, point[k].path, NULL, MS_REMOUNT | MS_RDONLY, NULL);
 }
 
 static void ShutdownBegin(InitState *st, i32 sig, u64 nowNs)
@@ -4992,7 +5102,7 @@ static NORETURN void ShutdownFinish(InitState *st)
     LogF("syncing");
     SysSync();
     WdogClose(st);
-    RemountReadOnly();
+    RemountReadOnly(&st->arena);
     SysSync();
 
     SysReboot(st->shutdownCmd);

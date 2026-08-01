@@ -62,8 +62,9 @@ make ARCH=x86_64
 ```
 
 Any of `gcc`, `clang` or `zig cc` will do, as a compiler driver only. `make
-allarch` builds every target. `PIE=0` falls back to `-static -no-pie` where the
-toolchain cannot produce a working static-pie.
+allarch` builds every target whose configured compiler is installed. `PIE=0`
+falls back to `-static -no-pie` where the toolchain cannot produce a working
+static-pie.
 
 ## Testing
 
@@ -99,7 +100,7 @@ The directory name under `/tasks/` is the schedule:
 |---|---|
 | `always` | at boot, respawned whenever it dies |
 | `boot` | at boot, a clean exit is final |
-| `30s` `5m` `24h` `7d` | on that interval since boot. Bare digits mean seconds |
+| `30s` `5m` `24h` `7d` | on that interval since boot, up to 366 days. Bare digits mean seconds |
 | `<N>d-HH-MM` | every N days at that wall-clock time |
 | `sun-HH-MM` … `sat-HH-MM` | at that time on that weekday |
 
@@ -112,10 +113,9 @@ queued.
 A board with no RTC boots at the epoch, so a wall-clock task fires early and is
 re-dated on the first SNTP sync. An unsynced clock never holds one back.
 
-Filenames sort, so the set of tasks picked up is the same on every boot whatever
-order the filesystem returns. Ordering is not dependency: tasks are forked
-without waiting on each other, so a task must tolerate a missing dependency and
-retry.
+Names are sorted byte-wise only so the same bounded task set is selected on each
+boot. Numeric prefixes have no special meaning, and tasks are forked without
+waiting. A task must tolerate a missing dependency and retry.
 
 ## Logging
 

@@ -5,6 +5,15 @@
  * the fixtures exercise the same syscall layer init does. */
 #include "init.c"
 
+/* libgcc's ARM division helper requires the libc raise ABI */
+#if defined(__arm__)
+int raise(int sig)
+{
+    UNUSED(sig);
+    SysExit(70);
+}
+#endif
+
 /* Helpers for the fixture tasks the boot tests supervise.
  *
  * They write to /dev/console rather than stdout, because stdout goes into the
