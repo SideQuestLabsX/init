@@ -33,9 +33,11 @@ else ifeq ($(ARCH),armv6)
   CFLAGS_ARCH := -march=armv6 -mfloat-abi=hard -mfpu=vfp -marm -fomit-frame-pointer
 else ifeq ($(ARCH),riscv64)
   CFLAGS_ARCH := -march=rv64gc -mabi=lp64d
-# loongarch jump tables use unsupported absolute .rodata relocations
+# LoongArch static PIE relocations are not supported by the self-relocator
+# Keep user code on the baseline LoongArch ISA, QEMU leaves user SIMD disabled
 else ifeq ($(ARCH),loongarch64)
-  CFLAGS_ARCH := -mabi=lp64d -fno-jump-tables
+  CFLAGS_ARCH := -mabi=lp64d -fno-jump-tables -mno-lsx -mno-lasx
+  ARCH_PIE := 0
 # MIPS static builds omit the unsupported GOT and $gp ABI
 else ifeq ($(ARCH),mips)
   CFLAGS_ARCH := -march=mips32r2 -mno-abicalls -fno-pic -EB
@@ -52,8 +54,15 @@ ARCH_PIE ?= 1
 PIE ?= $(ARCH_PIE)
 ifeq ($(PIE),1)
   LINKMODE := -static-pie
+  # Some ARM cross linkers retain PT_INTERP for -static-pie without this flag
+  LINKER_PIE_FLAGS := -Wl,--no-dynamic-linker
+  ifeq ($(ARCH),loongarch64)
+    # LoongArch GCC emits text relocations for freestanding static PIE
+    LINKER_PIE_FLAGS += -Wl,-z,notext
+  endif
 else
   LINKMODE := -static -no-pie
+  LINKER_PIE_FLAGS :=
 endif
 
 # Build-time policy belongs in config.h
@@ -77,7 +86,7 @@ else
   CONFIG_DEPS := config.h
 endif
 # 32-bit u64 division requires libgcc's __udivdi3
-LDFLAGS := -nostdlib $(LINKMODE) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecstack -lgcc
+LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
@@ -95,6 +104,8 @@ $(BUILD)/%.o: %.c $(CONFIG_DEPS) | $(BUILD)
 
 $(BUILD)/%.o: %.S | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/start.o: armv6-div.S
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -144,7 +155,7 @@ FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -static -no-pie \
 fixtures: $(FIXTURE_BIN)
 
 $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
-                     tests/fixtures/fixture.h init.c $(CONFIG_DEPS) | $(BUILD)
+                     tests/fixtures/fixture.h init.c armv6-div.S $(CONFIG_DEPS) | $(BUILD)
 	@mkdir -p $(BUILD)/fixtures
 	$(CC) $(FIXTURE_CFLAGS) $< tests/fixtures/fstart.S -o $@ \
 	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
@@ -159,7 +170,8 @@ STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
 
 status-reader: $(STATUS_READER)
 
-$(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c $(CONFIG_DEPS) | $(BUILD)
+$(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c armv6-div.S \
+                  $(CONFIG_DEPS) | $(BUILD)
 	$(CC) $(STATUS_READER_CFLAGS) tools/init-status.c tests/fixtures/fstart.S \
 	      -o $@ -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
@@ -170,7 +182,9 @@ NS_ROOTFS  ?= tools/stage-rootfs.sh
 test-qemu:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(QEMU_BUILD) BOOT_TEST=1 \
 	        BOOT_SNTP_SERVER=162.159.200.1 BOOT_SNTP_PORT=123 all fixtures
-	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
+	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) KERNEL="$(KERNEL)" DTB="$(DTB)" BIOS="$(BIOS)" \
+	        TIMEOUT="$(TIMEOUT)" \
+	        INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
 
 test-ns:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 \

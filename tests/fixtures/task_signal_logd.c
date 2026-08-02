@@ -123,9 +123,9 @@ static bool LogMarkersReady(bool bWriterTransitions)
     return true;
 }
 
-static bool WaitForLogMarkers(bool bWriterTransitions)
+static bool WaitForLogMarkers(bool bWriterTransitions, usize attempts)
 {
-    for(usize attempt = 0; attempt < FIXTURE_WAIT_ATTEMPTS; attempt++)
+    for(usize attempt = 0; attempt < attempts; attempt++)
     {
         if(LogMarkersReady(bWriterTransitions))
             return true;
@@ -165,7 +165,7 @@ void FixtureMain(void)
 #endif
 
 #ifndef FIXTURE_CAPTURE_DISABLED
-    if(!WaitForLogMarkers(false))
+    if(!WaitForLogMarkers(false, FIXTURE_WAIT_ATTEMPTS))
     {
         FixtureSay("FIXTURE initial log markers missing");
         SysExit(1);
@@ -181,7 +181,7 @@ void FixtureMain(void)
 
     FixtureSay("FIXTURE log writer signaled");
 
-    i32 respawned = WaitForOtherWriter(pid, 20);
+    i32 respawned = WaitForOtherWriter(pid, FIXTURE_WAIT_ATTEMPTS);
     if(respawned < 0)
     {
         FixtureSay("FIXTURE respawned log writer not found");
@@ -198,7 +198,7 @@ void FixtureMain(void)
     }
     FixtureSay("FIXTURE log writer stopped");
 
-    i32 replaced = WaitForOtherWriter(respawned, 40);
+    i32 replaced = WaitForOtherWriter(respawned, FIXTURE_WAIT_ATTEMPTS * 2u);
     if(replaced < 0)
     {
         FixtureSay("FIXTURE stalled log writer was not replaced");
@@ -207,7 +207,7 @@ void FixtureMain(void)
     FixtureSay("FIXTURE stalled log writer replaced");
 
 #ifndef FIXTURE_CAPTURE_DISABLED
-    if(!WaitForLogMarkers(true))
+    if(!WaitForLogMarkers(true, FIXTURE_WAIT_ATTEMPTS * 2u))
     {
         FixtureSay("FIXTURE final log markers missing");
         SysExit(1);

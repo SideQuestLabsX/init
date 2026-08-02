@@ -7,9 +7,16 @@ MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 MARKER_SNTP="${MARKER_SNTP:-1}"
 MARKER_STATUS="${MARKER_STATUS:-0}"
 MARKER_STATUS_FALLBACK="${MARKER_STATUS_FALLBACK:-0}"
+if [ -z "${EXPECT_TASKS:-}" ]; then
+    if [ "${INIT_SNTP_FIXTURE:-1}" -ne 0 ]; then
+        EXPECT_TASKS=22
+    else
+        EXPECT_TASKS=21
+    fi
+fi
 
-expect "init $ARCH starting, pid 1"
-expect "${EXPECT_TASKS:-21} tasks in /tasks"
+expect "init ${MARKER_ARCH:-$ARCH} starting, pid 1"
+expect "$EXPECT_TASKS tasks in /tasks"
 expect "ok: started pid"
 expect "FIXTURE ok started"
 expect "FIXTURE log edge line sent"
@@ -22,7 +29,7 @@ expect "flap: exit 3 sig 0, respawn in"
 expect "flap: FAILED after"
 expect "FIXTURE tick fired"
 expect "FIXTURE selftest done"
-expect "shutdown requested by signal 10"
+expect "shutdown requested by signal ${MARKER_SHUTDOWN_SIGNAL:-10}"
 expect "syncing"
 reject "PANIC"
 reject "Kernel panic"

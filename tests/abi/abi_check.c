@@ -1,5 +1,6 @@
 /* SOCK_DGRAM is absent from installed UAPI headers, MIPS runtime coverage is open */
 
+#include <stddef.h>
 #include <asm/unistd.h>
 #include <asm/errno.h>
 #include <linux/fcntl.h>
@@ -81,6 +82,39 @@ static const unsigned long long K_REBOOT_RESTART = (unsigned long long)LINUX_REB
 static const unsigned long long K_REBOOT_POWEROFF = (unsigned long long)LINUX_REBOOT_CMD_POWER_OFF;
 static const unsigned long long K_WDIOC_KEEPALIVE = (unsigned long long)WDIOC_KEEPALIVE;
 static const unsigned long long K_WDIOC_SETTIMEOUT = (unsigned long long)WDIOC_SETTIMEOUT;
+
+#if defined(__i386__) || defined(__arm__)
+typedef struct
+{
+    unsigned long handler;
+    unsigned long flags;
+    unsigned long restorer;
+    unsigned long mask[2];
+} KCompatSigAction;
+
+typedef struct
+{
+    unsigned long bits[2];
+} KCompatSigSet;
+
+enum
+{
+    K_SIGSET_BYTES = sizeof(KCompatSigSet),
+    K_SIGACTION_SIZE = sizeof(KCompatSigAction),
+    K_SIGACTION_FLAGS_OFFSET = offsetof(KCompatSigAction, flags),
+    K_SIGACTION_HANDLER_OFFSET = offsetof(KCompatSigAction, handler),
+    K_SIGACTION_MASK_OFFSET = offsetof(KCompatSigAction, mask),
+};
+#else
+enum
+{
+    K_SIGSET_BYTES = sizeof(sigset_t),
+    K_SIGACTION_SIZE = sizeof(struct sigaction),
+    K_SIGACTION_FLAGS_OFFSET = offsetof(struct sigaction, sa_flags),
+    K_SIGACTION_HANDLER_OFFSET = offsetof(struct sigaction, sa_handler),
+    K_SIGACTION_MASK_OFFSET = offsetof(struct sigaction, sa_mask),
+};
+#endif
 
 #undef O_NONBLOCK
 #undef O_CLOEXEC
@@ -186,6 +220,12 @@ static const unsigned long long K_WDIOC_SETTIMEOUT = (unsigned long long)WDIOC_S
 #include "init.c"
 
 #define SAME(ours, theirs) _Static_assert((ours) == (theirs), #ours " != " #theirs)
+
+SAME(KSIGSET_BYTES, K_SIGSET_BYTES);
+SAME(sizeof(KSigAction), K_SIGACTION_SIZE);
+SAME(offsetof(KSigAction, flags), K_SIGACTION_FLAGS_OFFSET);
+SAME(offsetof(KSigAction, handler), K_SIGACTION_HANDLER_OFFSET);
+SAME(offsetof(KSigAction, mask), K_SIGACTION_MASK_OFFSET);
 
 SAME(SYS_read, __NR_read);
 SAME(SYS_write, __NR_write);

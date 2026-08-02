@@ -66,6 +66,8 @@ _start:
 .Lhang:
     b       .Lhang
 
+#include "../../armv6-div.S"
+
 #elif defined(__mips__) && _MIPS_SIM == _ABIO32
 
     .globl _start

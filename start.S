@@ -133,6 +133,8 @@ InitSigRestore:
     svc     #0
     .size InitSigRestore, .-InitSigRestore
 
+#include "armv6-div.S"
+
 #elif defined(__mips__) && _MIPS_SIM == _ABIO32
 
     .globl _start

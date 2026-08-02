@@ -179,3 +179,69 @@ jobs:
         run: make test-qemu ARCH=aarch64 CC=aarch64-linux-gnu-gcc-14
         env:
           TIMEOUT: 300
+
+  boot-qemu-mips:
+    name: qemu boot test (mips)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install qemu and the compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex gcc-14-mips-linux-gnu \
+            gcc-mips-linux-gnu \
+            libelf-dev libssl-dev qemu-system-mips
+      - name: build the pinned Malta kernel
+        run: QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh mips
+      - name: run
+        run: make test-qemu ARCH=mips CC=mips-linux-gnu-gcc-14
+        env:
+          TIMEOUT: 300
+
+  boot-qemu-ports:
+    name: qemu boot test (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            cc: gcc-14
+            packages: gcc-14-multilib qemu-system-x86
+          - arch: armv6
+            cc: arm-linux-gnueabihf-gcc-14
+            packages: gcc-arm-linux-gnueabihf gcc-14-arm-linux-gnueabihf qemu-system-arm
+          - arch: armv7
+            cc: arm-linux-gnueabihf-gcc-14
+            packages: gcc-arm-linux-gnueabihf gcc-14-arm-linux-gnueabihf qemu-system-arm
+          - arch: riscv64
+            cc: riscv64-linux-gnu-gcc-14
+            packages: gcc-riscv64-linux-gnu gcc-14-riscv64-linux-gnu qemu-system-misc
+          - arch: loongarch64
+            cc: loongarch64-linux-gnu-gcc-14
+            packages: gcc-14-loongarch64-linux-gnu qemu-system-misc
+          - arch: mipsel
+            cc: mipsel-linux-gnu-gcc-14
+            packages: gcc-mipsel-linux-gnu gcc-14-mipsel-linux-gnu qemu-system-mips
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install qemu and the compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libelf-dev libssl-dev \
+            ${{ matrix.packages }}
+      - name: fetch LoongArch firmware
+        if: matrix.arch == 'loongarch64'
+        run: |
+          firmware="$RUNNER_TEMP/QEMU_EFI.fd"
+          curl -fsSL \
+            https://raw.githubusercontent.com/yangxiaojuan-loongson/qemu-binary/a688a39a8be458aae7b6e5db20b0457eca67525f/QEMU_EFI.fd \
+            -o "$firmware"
+          echo "f55fbf5d92e885844631ae9bfa8887f659bbb4f6ef2beea9e9ff8bc0603b6697  $firmware" | sha256sum -c -
+          echo "BIOS=$firmware" >> "$GITHUB_ENV"
+      - name: build the pinned kernel
+        run: QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh "${{ matrix.arch }}"
+      - name: run
+        run: make test-qemu ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+        env:
+          TIMEOUT: 300

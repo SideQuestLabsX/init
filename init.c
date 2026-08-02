@@ -509,13 +509,40 @@ typedef unsigned long usize;
   #define SIG_SETMASK  2
 #endif
 
-#define KSIGSET_BYTES 8
+#ifdef INIT_MIPS_ABI
+  #define KSIGSET_BYTES 16
+#else
+  #define KSIGSET_BYTES 8
+#endif
 
+#ifdef INIT_MIPS_ABI
+/* MIPS o32 keeps flags first and carries four 32-bit mask words */
+typedef struct
+{
+    u32     flags;
+    usize   handler;
+    u32     mask[4];
+} KSigAction;
+
+typedef struct
+{
+    u32 bits[4];
+} KSigSet;
+#else
 typedef struct
 {
     u64 bits;
 } KSigSet;
 
+#if defined(__i386__) || defined(__arm__)
+typedef struct
+{
+    usize handler;
+    usize flags;
+    usize restorer;
+    u32   mask[2];
+} KSigAction;
+#else
 /* Integer fields preserve the kernel ABI without function-pointer conversions */
 typedef struct
 {
@@ -526,6 +553,8 @@ typedef struct
 #endif
     u64   mask;
 } KSigAction;
+#endif
+#endif
 
 /* wait */
 #define WNOHANG   1
@@ -2113,7 +2142,8 @@ static inline isize SysCall6(isize n, isize a, isize b, isize c, isize d, isize 
     __asm__ volatile("syscall 0"
         : "+r"(a0)
         : "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5), "r"(a7)
-        : "memory");
+        : "a6", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8",
+          "memory");
     return a0;
 }
 
@@ -3865,6 +3895,21 @@ typedef struct
     LogdChain init;
 } LogdChains;
 
+static bool LogdHasOpenChain(const LogdChains *chains)
+{
+    if(chains->init.bOpen)
+        return true;
+    for(usize i = 0; i < CFG_MAX_TASKS; i++)
+    {
+        for(usize stream = 0; stream < 2; stream++)
+        {
+            if(chains->task[i][stream].bOpen)
+                return true;
+        }
+    }
+    return false;
+}
+
 typedef struct
 {
     char  buf[CFG_LOGD_BUF_BYTES];
@@ -4224,7 +4269,11 @@ NORETURN void LogWriterMain(InitState *st)
             (__atomic_load_n(&st->ring->control, __ATOMIC_ACQUIRE) & LOG_CTL_SHUTDOWN) != 0;
 
         bool bDue = nowNs - ls.lastFlushNs >= CFG_LOGD_FLUSH_NS;
-        if(bDue || bStopping || ls.len >= CFG_LOGD_FLUSH_BYTES)
+        bool bOpenChain = LogdHasOpenChain(&ls.chains);
+        bool bForceChainBreak = bOpenChain &&
+            nowNs - ls.lastFlushNs >= CFG_LOGD_FLUSH_NS * 2ull;
+        if((bDue || bStopping || ls.len >= CFG_LOGD_FLUSH_BYTES) &&
+           (bStopping || !bOpenChain || bForceChainBreak))
         {
             LogdBreakChains(&ls);
             LogdEmitRepeats(&ls, nowNs);
@@ -4605,11 +4654,24 @@ static isize InstallHandler(i32 sig, void (*fn)(i32))
     memset(&sa, 0, sizeof(sa));
     sa.handler = (usize)fn;
     sa.flags = SA_RESTART | SA_NOCLDSTOP;
+#if defined(__i386__) || defined(__arm__)
+    sa.flags |= SA_SIGINFO;
+#endif
 #ifdef INIT_HAS_SA_RESTORER
     sa.flags |= SA_RESTORER;
     sa.restorer = (usize)InitSigRestore;
 #endif
     return SysSigAction(sig, &sa, NULL);
+}
+
+static void SigSetAdd(KSigSet *set, i32 sig)
+{
+#ifdef INIT_MIPS_ABI
+    usize bit = (usize)(sig - 1);
+    set->bits[bit / 32u] |= 1u << (bit % 32u);
+#else
+    set->bits |= 1ull << (sig - 1);
+#endif
 }
 
 /* Block outside ppoll to close the flag-check-to-sleep race */
@@ -4629,13 +4691,17 @@ static void SignalSetup(KSigSet *outUnblocked)
         InitPanic("SIGHUP handler setup failed");
 
     KSigSet block;
-    block.bits = (1ull << (SIGCHLD - 1)) | (1ull << (SIGTERM - 1)) |
-                 (1ull << (SIGUSR1 - 1)) | (1ull << (SIGUSR2 - 1)) |
-                 (1ull << (SIGINT - 1)) | (1ull << (SIGHUP - 1));
+    memset(&block, 0, sizeof(block));
+    SigSetAdd(&block, SIGCHLD);
+    SigSetAdd(&block, SIGTERM);
+    SigSetAdd(&block, SIGUSR1);
+    SigSetAdd(&block, SIGUSR2);
+    SigSetAdd(&block, SIGINT);
+    SigSetAdd(&block, SIGHUP);
     if(SysSigProcMask(SIG_BLOCK, &block, NULL) < 0)
         InitPanic("signal mask setup failed");
 
-    outUnblocked->bits = 0;
+    memset(outUnblocked, 0, sizeof(*outUnblocked));
 }
 
 /* early boot */

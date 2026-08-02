@@ -81,7 +81,7 @@ make allarch
 
 GCC, Clang and `zig cc` are supported as compiler drivers. `make allarch` builds
 targets whose configured compilers are installed. The default is static PIE,
-except MIPS; `PIE=0` selects `-static -no-pie` elsewhere.
+except LoongArch and MIPS; `PIE=0` selects `-static -no-pie` elsewhere.
 
 ## Test
 
@@ -104,8 +104,8 @@ feature variants, then builds and ABI-checks installed cross-toolchains.
 On Windows, `tools/test.ps1` runs host tests, an x86_64 build and namespace tests
 through WSL. Without WSL, it runs native host tests.
 
-CI builds and ABI-checks all nine targets. It boots x86_64 and aarch64; runtime
-coverage for the other seven remains open.
+CI builds and ABI-checks all nine targets. It also runs architecture-specific QEMU
+boot tests with pinned kernels for every target.
 
 ## Watchdog and shutdown
 
