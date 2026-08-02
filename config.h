@@ -17,6 +17,9 @@
 #ifndef FEATURE_LOG_DISK
   #define FEATURE_LOG_DISK 1
 #endif
+#ifndef FEATURE_PERSIST_SCHEDULE
+  #define FEATURE_PERSIST_SCHEDULE 0
+#endif
 #ifndef OFFLINE_MODE
   #define OFFLINE_MODE 0
 #endif
@@ -61,6 +64,13 @@
 
 #ifndef CFG_LOG_RING_BYTES
   #define CFG_LOG_RING_BYTES  (132u * 1024u)
+#endif
+
+#ifndef CFG_SCHEDULE_STATE_PATH
+  #define CFG_SCHEDULE_STATE_PATH     "/var/lib/init.schedule"
+#endif
+#ifndef CFG_SCHEDULE_STATE_TMP_PATH
+  #define CFG_SCHEDULE_STATE_TMP_PATH "/var/lib/init.schedule.tmp"
 #endif
 
 _Static_assert(CFG_PATH_MAX >= CFG_NAME_MAX + sizeof(CFG_TASK_DIR) + 8,

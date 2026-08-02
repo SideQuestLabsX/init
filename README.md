@@ -38,9 +38,11 @@ The directory below `/tasks/` defines the schedule:
 | `<N>d-HH-MM` | Run every N days at that wall-clock time |
 | `sun-HH-MM` through `sat-HH-MM` | Run at that time on the named weekday |
 
-Intervals use boot time and keep their phase until reboot. Calendar schedules
-use `CFG_TZ_OFFSET_SEC`, with no DST handling. Missed slots and overruns are
-skipped rather than queued.
+Intervals use boot time and keep their phase until reboot. When
+`FEATURE_PERSIST_SCHEDULE` is enabled, successful interval runs are recorded on
+the persistent state path and reused after the next successful SNTP sync.
+Calendar schedules use `CFG_TZ_OFFSET_SEC`, with no DST handling. Missed slots
+and overruns are skipped rather than queued.
 
 A machine without a working RTC schedules calendar tasks against its current
 clock. They may run early and are re-dated after the first successful SNTP sync.
@@ -63,9 +65,10 @@ state diagnostics and does not require task cooperation.
 ## Configuration
 
 Edit [`config.h`](config.h) and rebuild. It contains feature switches, paths,
-limits, timing, output routes, the fixed timezone offset, SNTP settings and the
-per-task rules table. There is no runtime configuration file. `PIE=0` is the
-only make-time configuration switch outside the header.
+limits, timing, output routes, the fixed timezone offset, SNTP settings, the
+schedule state paths and the per-task rules table. There is no runtime
+configuration file. `PIE=0` is the only make-time configuration switch outside
+the header.
 
 ## Build
 

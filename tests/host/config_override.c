@@ -9,6 +9,9 @@ typedef unsigned long long u64;
 #define CFG_TASK_DIR "/override/tasks"
 #define CFG_LOG_PATH "/override/init.log"
 #define CFG_WATCHDOG_DEV "/override/watchdog"
+#define FEATURE_PERSIST_SCHEDULE 1
+#define CFG_SCHEDULE_STATE_PATH "/override/schedule.state"
+#define CFG_SCHEDULE_STATE_TMP_PATH "/override/schedule.state.tmp"
 #define CFG_LOGD_UID 123u
 #define CFG_PATH_MAX 320u
 #define CFG_NAME_MAX 80u

@@ -1134,6 +1134,40 @@ u64 IntervalAdvance(u64 prevNs, u64 intervalNs, u64 nowNs)
     return next;
 }
 
+/* Persisted timestamps use realtime, then project the next slot onto boot time */
+u64 PersistIntervalNext(u64 lastRunNs, u64 intervalNs, u64 nowNs)
+{
+    u64 max = ~(u64)0;
+    if(intervalNs == 0)
+        return nowNs;
+    if(lastRunNs > max - intervalNs)
+        return max;
+
+    u64 next = lastRunNs + intervalNs;
+    if(next > nowNs)
+        return next;
+
+    u64 behind = nowNs - next;
+    u64 steps = behind / intervalNs + 1ull;
+    if(steps > (max - next) / intervalNs)
+        return max;
+    return next + steps * intervalNs;
+}
+
+u64 PersistProjectDeadline(u64 lastRunNs, u64 intervalNs,
+                           u64 nowRealNs, u64 nowBootNs)
+{
+    u64 next = PersistIntervalNext(lastRunNs, intervalNs, nowRealNs);
+    u64 max = ~(u64)0;
+    if(next == max)
+        return max;
+    if(next <= nowRealNs)
+        return nowBootNs;
+
+    u64 delay = next - nowRealNs;
+    return delay > max - nowBootNs ? max : nowBootNs + delay;
+}
+
 u64 SecsUntilCalendar(const CalSpec *c, u64 unixSec, i32 tzOffsetSec)
 {
     u64 dayNum = LocalDayNum(unixSec, tzOffsetSec);
@@ -2568,6 +2602,18 @@ void StatusInit(StatusBlock *status, StatusSnapshot *snapshot);
 #define SCHED_EVERY  2u   /* /tasks/<dur>/        interval since boot */
 #define SCHED_CAL    3u   /* /tasks/1d-03-30/     wall clock recurrence */
 
+#define SCHEDULE_STATE_MAGIC          0x31415453u
+#define SCHEDULE_STATE_VERSION        1u
+#define SCHEDULE_STATE_HEADER_BYTES   16u
+#define SCHEDULE_STATE_PREFIX_BYTES   12u
+#define SCHEDULE_STATE_RECORD_BYTES   (SCHEDULE_STATE_PREFIX_BYTES + CFG_PATH_MAX)
+
+typedef struct
+{
+    char path[CFG_PATH_MAX];
+    u64  lastRunNs;
+} PersistEntry;
+
 typedef struct
 {
     char path[CFG_PATH_MAX];
@@ -2577,6 +2623,8 @@ typedef struct
     u32  schedule;
     u64  intervalNs;
     CalSpec cal;        /* SCHED_CAL only */
+    u64  lastRunRealNs;
+    bool bHasLastRun;
 
     /* Resolved from TASK_RULES at scan time */
     u32  uid;
@@ -2644,6 +2692,8 @@ typedef struct
 
     Task         task[CFG_MAX_TASKS];
     usize        taskCount;
+    PersistEntry persist[CFG_MAX_TASKS];
+    usize        persistCount;
 
     i32          consoleFd;
     i32          wdogFd;
@@ -2686,6 +2736,12 @@ bool TaskAnyAlive(const InitState *st);
 u64  TaskNextDeadline(const InitState *st, u64 nowNs);
 void TaskDrain(InitState *st, Task *t);
 void TaskPublish(InitState *st);
+
+static void ScheduleStateLoad(InitState *st);
+#if !OFFLINE_MODE
+static void ScheduleStateRedate(InitState *st, u64 nowNs);
+#endif
+static void ScheduleStateRecordSuccess(InitState *st, Task *t);
 
 void ProbeTick(InitState *st, Task *t, u64 nowNs);
 bool ProbeReap(InitState *st, i32 pid, i32 status, u64 nowNs);
@@ -2944,6 +3000,310 @@ static void TaskApplyRule(Task *t)
                                     CFG_STDERR_POLICY);
 }
 
+#if FEATURE_PERSIST_SCHEDULE && !OFFLINE_MODE
+
+static void ScheduleStatePutU16(u8 *dst, u16 value)
+{
+    dst[0] = (u8)value;
+    dst[1] = (u8)(value >> 8);
+}
+
+static void ScheduleStatePutU32(u8 *dst, u32 value)
+{
+    for(usize i = 0; i < 4; i++)
+        dst[i] = (u8)(value >> (i * 8));
+}
+
+static void ScheduleStatePutU64(u8 *dst, u64 value)
+{
+    for(usize i = 0; i < 8; i++)
+        dst[i] = (u8)(value >> (i * 8));
+}
+
+static u16 ScheduleStateGetU16(const u8 *src)
+{
+    return (u16)src[0] | (u16)((u16)src[1] << 8);
+}
+
+static u32 ScheduleStateGetU32(const u8 *src)
+{
+    u32 value = 0;
+    for(usize i = 0; i < 4; i++)
+        value |= (u32)src[i] << (i * 8);
+    return value;
+}
+
+static u64 ScheduleStateGetU64(const u8 *src)
+{
+    u64 value = 0;
+    for(usize i = 0; i < 8; i++)
+        value |= (u64)src[i] << (i * 8);
+    return value;
+}
+
+static isize ScheduleStateReadSome(i32 fd, void *buf, usize bytes)
+{
+    for(;;)
+    {
+        isize result = SysRead(fd, buf, bytes);
+        if(result != -EINTR)
+            return result;
+    }
+}
+
+static bool ScheduleStateReadExact(i32 fd, void *buf, usize bytes)
+{
+    u8 *dst = (u8 *)buf;
+    while(bytes != 0)
+    {
+        isize result = ScheduleStateReadSome(fd, dst, bytes);
+        if(result <= 0)
+            return false;
+        dst += (usize)result;
+        bytes -= (usize)result;
+    }
+    return true;
+}
+
+static bool ScheduleStateWriteExact(i32 fd, const void *buf, usize bytes)
+{
+    const u8 *src = (const u8 *)buf;
+    while(bytes != 0)
+    {
+        isize result = SysWrite(fd, src, bytes);
+        if(result == -EINTR)
+            continue;
+        if(result <= 0)
+            return false;
+        src += (usize)result;
+        bytes -= (usize)result;
+    }
+    return true;
+}
+
+static usize ScheduleStateFind(const InitState *st, const char *path)
+{
+    for(usize i = 0; i < st->persistCount; i++)
+    {
+        if(StrEq(st->persist[i].path, path))
+            return i;
+    }
+    return CFG_MAX_TASKS;
+}
+
+static bool ScheduleStateSet(InitState *st, const char *path, u64 lastRunNs)
+{
+    usize index = ScheduleStateFind(st, path);
+    if(index == CFG_MAX_TASKS)
+    {
+        if(st->persistCount == CFG_MAX_TASKS ||
+           !StrCopyOk(st->persist[st->persistCount].path, CFG_PATH_MAX, path))
+            return false;
+        index = st->persistCount++;
+    }
+    st->persist[index].lastRunNs = lastRunNs;
+    return true;
+}
+
+static void ScheduleStateLoad(InitState *st)
+{
+    st->persistCount = 0;
+
+    isize fd = SysOpen(CFG_SCHEDULE_STATE_PATH, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    if(fd == -ENOENT)
+        return;
+    if(fd < 0)
+    {
+        LogF("schedule state: open failed (%d)", (i32)fd);
+        return;
+    }
+
+    u8 header[SCHEDULE_STATE_HEADER_BYTES];
+    bool bValid = ScheduleStateReadExact((i32)fd, header, sizeof(header));
+    u32 count = 0;
+    if(bValid)
+    {
+        bValid = ScheduleStateGetU32(&header[0]) == SCHEDULE_STATE_MAGIC &&
+                 ScheduleStateGetU32(&header[4]) == SCHEDULE_STATE_VERSION &&
+                 ScheduleStateGetU32(&header[12]) == 0;
+        count = ScheduleStateGetU32(&header[8]);
+        bValid = bValid && count <= CFG_MAX_TASKS;
+    }
+
+    for(u32 i = 0; bValid && i < count; i++)
+    {
+        u8 record[SCHEDULE_STATE_RECORD_BYTES];
+        bValid = ScheduleStateReadExact((i32)fd, record, sizeof(record));
+        if(!bValid)
+            break;
+
+        u16 pathLen = ScheduleStateGetU16(&record[0]);
+        if(pathLen == 0 || pathLen >= CFG_PATH_MAX ||
+           record[2] != 0 || record[3] != 0 || record[SCHEDULE_STATE_PREFIX_BYTES] != '/')
+        {
+            bValid = false;
+            break;
+        }
+
+        for(usize j = SCHEDULE_STATE_PREFIX_BYTES + pathLen;
+            j < sizeof(record); j++)
+        {
+            if(record[j] != 0)
+            {
+                bValid = false;
+                break;
+            }
+        }
+        if(!bValid)
+            break;
+
+        PersistEntry *entry = &st->persist[st->persistCount];
+        memcpy(entry->path, &record[SCHEDULE_STATE_PREFIX_BYTES], pathLen);
+        entry->path[pathLen] = '\0';
+        if(ScheduleStateFind(st, entry->path) != CFG_MAX_TASKS)
+        {
+            bValid = false;
+            break;
+        }
+        entry->lastRunNs = ScheduleStateGetU64(&record[4]);
+        st->persistCount++;
+    }
+
+    if(bValid)
+    {
+        u8 extra = 0;
+        isize result = ScheduleStateReadSome((i32)fd, &extra, sizeof(extra));
+        bValid = result == 0;
+    }
+    if(SysClose((i32)fd) < 0)
+        bValid = false;
+
+    if(!bValid)
+    {
+        st->persistCount = 0;
+        LogF("schedule state: invalid file ignored");
+    }
+}
+
+static void ScheduleStateSave(const InitState *st)
+{
+    isize fd = SysOpen(CFG_SCHEDULE_STATE_TMP_PATH,
+                       O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if(fd < 0)
+    {
+        LogF("schedule state: temporary open failed (%d)", (i32)fd);
+        return;
+    }
+
+    u8 header[SCHEDULE_STATE_HEADER_BYTES];
+    memset(header, 0, sizeof(header));
+    ScheduleStatePutU32(&header[0], SCHEDULE_STATE_MAGIC);
+    ScheduleStatePutU32(&header[4], SCHEDULE_STATE_VERSION);
+    ScheduleStatePutU32(&header[8], (u32)st->persistCount);
+
+    bool bOk = ScheduleStateWriteExact((i32)fd, header, sizeof(header));
+    for(usize i = 0; bOk && i < st->persistCount; i++)
+    {
+        const PersistEntry *entry = &st->persist[i];
+        usize pathLen = StrLen(entry->path);
+        u8 record[SCHEDULE_STATE_RECORD_BYTES];
+        if(pathLen == 0 || pathLen >= CFG_PATH_MAX)
+        {
+            bOk = false;
+            break;
+        }
+
+        memset(record, 0, sizeof(record));
+        ScheduleStatePutU16(&record[0], (u16)pathLen);
+        ScheduleStatePutU64(&record[4], entry->lastRunNs);
+        memcpy(&record[SCHEDULE_STATE_PREFIX_BYTES], entry->path, pathLen);
+        bOk = ScheduleStateWriteExact((i32)fd, record, sizeof(record));
+    }
+    if(bOk && SysFsync((i32)fd) < 0)
+        bOk = false;
+    if(SysClose((i32)fd) < 0)
+        bOk = false;
+
+    if(!bOk)
+    {
+        SysUnlink(CFG_SCHEDULE_STATE_TMP_PATH);
+        LogF("schedule state: temporary write failed");
+        return;
+    }
+    if(SysRename(CFG_SCHEDULE_STATE_TMP_PATH, CFG_SCHEDULE_STATE_PATH) < 0)
+    {
+        SysUnlink(CFG_SCHEDULE_STATE_TMP_PATH);
+        LogF("schedule state: rename failed");
+    }
+}
+
+static void ScheduleStateApply(Task *t, const InitState *st)
+{
+    usize index = ScheduleStateFind(st, t->path);
+    if(index == CFG_MAX_TASKS)
+        return;
+    t->lastRunRealNs = st->persist[index].lastRunNs;
+    t->bHasLastRun = true;
+}
+
+static void ScheduleStateRedate(InitState *st, u64 nowNs)
+{
+    u64 nowRealNs = SysRealNs();
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        Task *t = &st->task[i];
+        if(t->schedule != SCHED_EVERY || !t->bHasLastRun || t->state == TS_RUNNING)
+            continue;
+        t->nextRunNs = PersistProjectDeadline(t->lastRunRealNs, t->intervalNs,
+                                               nowRealNs, nowNs);
+    }
+}
+
+static void ScheduleStateRecordSuccess(InitState *st, Task *t)
+{
+    if(!st->bSntpSynced || t->schedule != SCHED_EVERY)
+        return;
+
+    u64 nowRealNs = SysRealNs();
+    if(!ScheduleStateSet(st, t->path, nowRealNs))
+    {
+        LogF("%s: schedule state table full", TaskName(t));
+        return;
+    }
+    t->lastRunRealNs = nowRealNs;
+    t->bHasLastRun = true;
+    ScheduleStateSave(st);
+}
+
+#else
+
+static void ScheduleStateLoad(InitState *st)
+{
+    UNUSED(st);
+}
+
+#if !OFFLINE_MODE
+static void ScheduleStateRedate(InitState *st, u64 nowNs)
+{
+    UNUSED(st);
+    UNUSED(nowNs);
+}
+#endif
+
+static void ScheduleStateRecordSuccess(InitState *st, Task *t)
+{
+    UNUSED(st);
+    UNUSED(t);
+}
+
+static void ScheduleStateApply(Task *t, const InitState *st)
+{
+    UNUSED(t);
+    UNUSED(st);
+}
+
+#endif
+
 /* Calendar deadlines are projected onto CLOCK_BOOTTIME */
 static u64 TaskNextRunNs(const Task *t, u64 nowNs)
 {
@@ -3079,6 +3439,7 @@ void TaskScanAll(InitState *st)
             t->intervalNs = intervalNs;
             t->cal = cal;
             TaskApplyRule(t);
+            ScheduleStateApply(t, st);
 
             t->outFd = -1;
             t->errFd = -1;
@@ -3284,6 +3645,8 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     if(t->schedule == SCHED_EVERY || t->schedule == SCHED_CAL)
     {
         t->state = TS_IDLE;
+        if(t->schedule == SCHED_EVERY && bClean)
+            ScheduleStateRecordSuccess(st, t);
         if(!bClean)
             LogF("%s: exit %d sig %d after %ums", TaskName(t), t->lastExit, t->lastSignal,
                  (u32)((nowNs - t->startedNs) / NS_PER_MS));
@@ -3868,6 +4231,7 @@ void SntpHandleReply(InitState *st, u64 nowNs)
 
     LogF("sntp: clock set to %llu", (u64)ts.sec);
     st->bSntpSynced = true;
+    ScheduleStateRedate(st, nowNs);
     TaskRedateCal(st, nowNs);
 }
 
@@ -5153,6 +5517,7 @@ void InitMain(void)
     }
 
     ArenaInit(&st->arena, G_ARENA, sizeof(G_ARENA));
+    ScheduleStateLoad(st);
 
     KSigSet unblocked;
     SignalSetup(&unblocked);

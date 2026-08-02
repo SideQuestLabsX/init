@@ -161,6 +161,15 @@ static void TestNumbers(void)
     dl = IntervalAdvance(1000, 100, 999999);
     CHECK(dl > 999999 && (dl - 1000) % 100 == 0);
 
+    CHECK(PersistIntervalNext(0, 100, 0) == 100);
+    CHECK(PersistIntervalNext(1000, 0, 2500) == 2500);
+    CHECK(PersistIntervalNext(1000, 100, 1050) == 1100);
+    CHECK(PersistIntervalNext(1000, 100, 1100) == 1200);
+    CHECK(PersistIntervalNext(0, 100, 250) == 300);
+    CHECK(PersistProjectDeadline(1000, 100, 1050, 5000) == 5050);
+    CHECK(PersistProjectDeadline(0, 100, 250, 5000) == 5050);
+    CHECK(PersistProjectDeadline(~(u64)0, 100, 0, 5000) == ~(u64)0);
+
     CHECK(LocalWeekday(0) == 4);
     CHECK(LocalWeekday(3) == 0);
     CHECK(LocalDayNum(0, 0) == 0);

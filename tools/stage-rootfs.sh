@@ -10,7 +10,7 @@ if [ ! -x "$BUILD/init" ]; then
 fi
 
 rm -rf "$STAGE"
-mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/run" "$STAGE/sys" "$STAGE/var/log" \
+mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/run" "$STAGE/sys" "$STAGE/var/log" "$STAGE/var/lib" \
          "$STAGE/tasks/always" "$STAGE/tasks/boot" \
          "$STAGE/tasks/2s" "$STAGE/tasks/500ms" "$STAGE/tasks/1h" "$STAGE/tasks/3d" \
          "$STAGE/tasks/1d-03-30" "$STAGE/tasks/4d-03-30" "$STAGE/tasks/sun-04-00"
