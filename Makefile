@@ -68,29 +68,44 @@ endif
 # Build-time policy belongs in config.h
 EXTRA_CFLAGS ?=
 
-CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS)
-
 # Boot tests replace task rules and shorten writer timing
 BOOT_SNTP_SERVER ?= 127.0.0.1
 BOOT_SNTP_PORT   ?= 40123
+BOOT_CFLAGS      :=
 ifeq ($(BOOT_TEST),1)
-  CFLAGS += -DCFG_LOGD_FLUSH_NS=2000000000ull \
-            -DCFG_RESTART_GRACE_NS=500000000ull \
-            -DCFG_LOGD_STALL_NS=1000000000ull \
-            -DCFG_SNTP_SERVER='"$(BOOT_SNTP_SERVER)"' \
-            -DCFG_SNTP_PORT=$(BOOT_SNTP_PORT) \
-            -DCFG_SNTP_RETRY_NS=250000000ull \
-            -DINIT_TASK_RULES_H='"tests/fixtures/test_rules.h"'
-  CONFIG_DEPS := config.h tests/fixtures/test_rules.h
+ifeq ($(WATCHDOG_TEST),1)
+  BOOT_RULES := -DINIT_TASK_RULES_H='"tests/fixtures/watchdog_rules.h"'
+  CONFIG_DEPS := config.h tests/fixtures/watchdog_rules.h
 else
+  BOOT_RULES := -DINIT_TASK_RULES_H='"tests/fixtures/test_rules.h"'
+  CONFIG_DEPS := config.h tests/fixtures/test_rules.h
+endif
+  BOOT_CFLAGS := -DCFG_LOGD_FLUSH_NS=2000000000ull \
+                 -DCFG_RESTART_GRACE_NS=500000000ull \
+                 -DCFG_LOGD_STALL_NS=1000000000ull \
+                 -DCFG_SNTP_SERVER='"$(BOOT_SNTP_SERVER)"' \
+                 -DCFG_SNTP_PORT=$(BOOT_SNTP_PORT) \
+                 -DCFG_SNTP_RETRY_NS=250000000ull
+else
+  BOOT_RULES :=
   CONFIG_DEPS := config.h
 endif
+ifeq ($(WATCHDOG_TEST),1)
+  BOOT_CFLAGS += -DCFG_WDOG_TIMEOUT_SEC=2 \
+                 -DCFG_WDOG_PET_NS=200000000ull \
+                 -DCFG_PROBE_FAIL_LIMIT=100 \
+                 -DOFFLINE_MODE=1
+endif
+
+CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS) \
+           $(BOOT_CFLAGS) $(BOOT_RULES)
+
 # 32-bit u64 division requires libgcc's __udivdi3
 LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-config-overrides test-ns test-faults test-qemu test-variant test-variants abi-check fixtures status-reader allarch help
+.PHONY: all clean check check-all test test-config-overrides test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -176,6 +191,7 @@ $(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c armv6-div.S
 	      -o $@ -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 QEMU_BUILD ?= build/$(ARCH)-qemu
+WATCHDOG_QEMU_BUILD ?= build/$(ARCH)-watchdog-qemu
 NS_BUILD   ?= build/$(ARCH)-ns
 NS_ROOTFS  ?= tools/stage-rootfs.sh
 
@@ -185,6 +201,12 @@ test-qemu:
 	ARCH=$(ARCH) BUILD=$(QEMU_BUILD) KERNEL="$(KERNEL)" DTB="$(DTB)" BIOS="$(BIOS)" \
 	        TIMEOUT="$(TIMEOUT)" \
 	        INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
+
+test-qemu-watchdog:
+	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(WATCHDOG_QEMU_BUILD) BOOT_TEST=1 \
+	        WATCHDOG_TEST=1 all fixtures
+	ARCH=$(ARCH) BUILD=$(WATCHDOG_QEMU_BUILD) KERNEL="$(KERNEL)" DTB="$(DTB)" BIOS="$(BIOS)" \
+	        TIMEOUT="$(TIMEOUT)" WATCHDOG_TEST=1 INIT_SNTP_FIXTURE=0 sh tools/run-qemu.sh
 
 test-ns:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 \
@@ -299,6 +321,7 @@ help:
 	@echo "make test-faults                    fault-injected child and clock tests"
 	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"
 	@echo "make test-qemu ARCH=x86|x86_64|aarch64  boot test under qemu"
+	@echo "make test-qemu-watchdog                  test hardware watchdog reset"
 	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"
 	@echo "make test-variants                  test every disabled feature"
 	@echo "make check                          everything runnable here"

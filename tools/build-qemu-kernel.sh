@@ -24,6 +24,12 @@ case "$ARCH" in
         BUILD_TARGETS=bzImage
         KERNEL_FILE="$KERNEL_ROOT/linux-$KERNEL_VERSION/arch/x86/boot/bzImage"
         ;;
+    x86_64)
+        KERNEL_ARCH=x86
+        DEFCONFIG=x86_64_defconfig
+        BUILD_TARGETS=bzImage
+        KERNEL_FILE="$KERNEL_ROOT/linux-$KERNEL_VERSION/arch/x86/boot/bzImage"
+        ;;
     armv6)
         KERNEL_ARCH=arm
         CROSS_COMPILE=arm-linux-gnueabihf-
@@ -73,6 +79,11 @@ case "$ARCH" in
         ;;
 esac
 
+if [ "${QEMU_WATCHDOG:-0}" -ne 0 ] && [ "$ARCH" != x86_64 ]; then
+    echo "QEMU watchdog kernel requires ARCH=x86_64" >&2
+    exit 2
+fi
+
 KERNEL_CC="${KERNEL_CC:-${CROSS_COMPILE}gcc}"
 if ! command -v "$KERNEL_CC" >/dev/null 2>&1; then
     for candidate in "${CROSS_COMPILE}gcc-14" "${CROSS_COMPILE}gcc-13"; do
@@ -111,6 +122,11 @@ make -C "$KERNEL_SOURCE" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
         --enable BLK_DEV_INITRD \
         --enable TMPFS
     case "$ARCH" in
+        x86_64)
+            if [ "${QEMU_WATCHDOG:-0}" -ne 0 ]; then
+                ./scripts/config --enable WATCHDOG --enable I6300ESB_WDT
+            fi
+            ;;
         mips)
             ./scripts/config --enable CPU_BIG_ENDIAN --disable CPU_LITTLE_ENDIAN
             ;;

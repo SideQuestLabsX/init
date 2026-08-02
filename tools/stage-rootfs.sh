@@ -36,6 +36,12 @@ install_bin()
     chmod 0755 "$STAGE/$2"
 }
 
+if [ "${INIT_WATCHDOG_TEST:-0}" -ne 0 ]; then
+    install_bin task_watchdog tasks/always/watchdog
+    install_bin probe_watchdog tasks/always/watchdog.check
+    exit 0
+fi
+
 install_bin task_ok           tasks/always/ok
 install_bin probe_ok          tasks/always/ok.check
 install_bin task_log_edge     tasks/always/log_edge

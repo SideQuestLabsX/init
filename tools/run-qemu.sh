@@ -4,6 +4,7 @@ set -eu
 ARCH="${ARCH:-x86_64}"
 BUILD="${BUILD:-build/$ARCH}"
 TIMEOUT="${TIMEOUT:-}"
+WATCHDOG_TEST="${WATCHDOG_TEST:-0}"
 LOG="$BUILD/qemu-console.log"
 KERNEL="${KERNEL:-}"
 DTB="${DTB:-}"
@@ -53,6 +54,11 @@ case "$ARCH" in
     *) echo "SKIP: no qemu boot test for ARCH=$ARCH"; exit 0 ;;
 esac
 
+if [ "$WATCHDOG_TEST" -ne 0 ] && [ "$ARCH" != x86_64 ]; then
+    echo "ERROR: hardware watchdog test requires ARCH=x86_64"
+    exit 2
+fi
+
 TIMEOUT="${TIMEOUT:-90}"
 MEMORY="${MEMORY:-256}"
 
@@ -98,7 +104,8 @@ if [ "$NEEDS_BIOS" -ne 0 ] && { [ -z "$BIOS" ] || [ ! -r "$BIOS" ]; }; then
     exit 0
 fi
 
-BUILD="$BUILD" OUT="$BUILD/initramfs.cpio" sh tools/mkinitramfs.sh
+INIT_WATCHDOG_TEST="$WATCHDOG_TEST" \
+    BUILD="$BUILD" OUT="$BUILD/initramfs.cpio" sh tools/mkinitramfs.sh
 
 echo "booting $KERNEL under $QEMU"
 set +e
@@ -109,21 +116,35 @@ fi
 if [ -n "$DTB" ]; then
     set -- "$@" -dtb "$DTB"
 fi
+if [ "$WATCHDOG_TEST" -ne 0 ]; then
+    set -- "$@" -device i6300esb -watchdog-action reset
+else
+    set -- "$@" -no-reboot
+fi
 set -- "$@" \
     -kernel "$KERNEL" \
     -initrd "$BUILD/initramfs.cpio" \
     -append "console=$CONSOLE panic=1 loglevel=4" \
-    -nographic -no-reboot -serial mon:stdio -display none
+    -nographic -serial mon:stdio -display none
 "$@" > "$LOG" 2>&1 &
 QEMU_PID=$!
 QEMU_RC=0
 QEMU_COMPLETE=0
 QEMU_ELAPSED=0
 while kill -0 "$QEMU_PID" 2>/dev/null; do
-    if grep -qF "init: syncing" "$LOG" 2>/dev/null; then
-        QEMU_COMPLETE=1
-        kill "$QEMU_PID" 2>/dev/null
-        break
+    if [ "$WATCHDOG_TEST" -ne 0 ]; then
+        boot_count=$(grep -cF "watchdog armed" "$LOG" 2>/dev/null || true)
+        if [ "$boot_count" -ge 2 ]; then
+            QEMU_COMPLETE=1
+            kill "$QEMU_PID" 2>/dev/null
+            break
+        fi
+    else
+        if grep -qF "init: syncing" "$LOG" 2>/dev/null; then
+            QEMU_COMPLETE=1
+            kill "$QEMU_PID" 2>/dev/null
+            break
+        fi
     fi
     if [ "$QEMU_ELAPSED" -ge "$TIMEOUT" ]; then
         kill "$QEMU_PID" 2>/dev/null
@@ -162,6 +183,34 @@ reject()
         fail=1
     fi
 }
+
+if [ "$WATCHDOG_TEST" -ne 0 ]; then
+    echo "checking watchdog markers:"
+
+    armed_count=$(grep -cF "watchdog armed, 2s timeout" "$LOG" 2>/dev/null || true)
+    if [ "$armed_count" -ge 2 ]; then
+        echo "  ok    watchdog armed on two boots"
+    else
+        echo "  MISS  watchdog armed on two boots"
+        fail=1
+    fi
+    expect "WATCHDOG task started"
+    expect "watchdog: probe failed ("
+
+    if [ $QEMU_RC -ne 0 ]; then
+        echo "  BAD   qemu exited $QEMU_RC before watchdog reset was observed"
+        fail=1
+    else
+        echo "  ok    qemu remained alive through the watchdog reset"
+    fi
+
+    if [ $fail -ne 0 ]; then
+        echo "QEMU WATCHDOG TEST FAILED"
+        exit 1
+    fi
+    echo "QEMU WATCHDOG TEST PASSED"
+    exit 0
+fi
 
 echo "checking markers:"
 export MARKER_ARCH
