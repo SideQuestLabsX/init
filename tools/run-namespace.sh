@@ -97,6 +97,7 @@ log_symlink=${INIT_LOG_SYMLINK:-0}
 status_reader=${INIT_STATUS_READER:-0}
 status_fallback=${INIT_STATUS_FALLBACK:-0}
 remount_test=${INIT_NS_REMOUNT_TEST:-0}
+discovery_test=${INIT_TASK_DISCOVERY_TEST:-0}
 case "${FEATURE_VARIANT:-}" in
     OFFLINE_MODE=1)
         sntp_fixture=0
@@ -119,9 +120,10 @@ INIT_NS_PRIVILEGE_FIXTURES=$privilege_fixtures \
 INIT_LOG_SYMLINK=$log_symlink \
 INIT_STATUS_READER=$status_reader \
 INIT_STATUS_FALLBACK=$status_fallback \
+INIT_TASK_DISCOVERY_TEST=$discovery_test \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures))
+task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + 2 * discovery_test))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
@@ -131,6 +133,9 @@ if [ "$status_reader" -ne 0 ]; then
 fi
 if [ "$status_fallback" -ne 0 ]; then
     MARKER_STATUS_FALLBACK=1
+fi
+if [ "$discovery_test" -ne 0 ]; then
+    MARKER_DISCOVERY=1
 fi
 
 # User namespaces cannot mount devtmpfs

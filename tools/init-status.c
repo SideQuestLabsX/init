@@ -49,6 +49,8 @@ static const char *StateName(u32 state)
     case TS_IDLE: return "idle";
     case TS_DONE: return "done";
     case TS_FAILED: return "failed";
+    case TS_REMOVED: return "removed";
+    case TS_RETIRED: return "retired";
     default: return "unknown";
     }
 }

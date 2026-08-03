@@ -63,6 +63,13 @@ install_bin task_oneshot      tasks/boot/oneshot
 install_bin task_stable       tasks/boot/stable
 install_bin task_tick         tasks/2s/tick
 
+if [ "${INIT_TASK_DISCOVERY_TEST:-0}" -ne 0 ]; then
+    install_bin task_discovery_controller tasks/boot/discovery_controller
+    install_bin task_discovery_v1 tasks/always/discovery_replace
+    install_bin task_discovery_v1 tasks/always/.discovery_add
+    install_bin task_discovery_v2 tasks/always/.discovery_replace_v2
+fi
+
 if [ "${INIT_STATUS_READER:-0}" -ne 0 ]; then
     cp "$BUILD/init-status" "$STAGE/tasks/500ms/status-reader"
     chmod 0755 "$STAGE/tasks/500ms/status-reader"

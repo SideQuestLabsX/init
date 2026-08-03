@@ -20,6 +20,9 @@
 #ifndef FEATURE_PERSIST_SCHEDULE
   #define FEATURE_PERSIST_SCHEDULE 0
 #endif
+#ifndef FEATURE_TASK_DISCOVERY
+  #define FEATURE_TASK_DISCOVERY 1
+#endif
 #ifndef OFFLINE_MODE
   #define OFFLINE_MODE 0
 #endif
@@ -124,6 +127,9 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 #endif
 #ifndef CFG_LOOP_MAX_WAIT_NS
   #define CFG_LOOP_MAX_WAIT_NS  (1ull * NS_PER_SEC)
+#endif
+#ifndef CFG_TASK_SCAN_NS
+  #define CFG_TASK_SCAN_NS      (1ull * NS_PER_SEC)
 #endif
 
 /* disk logging */

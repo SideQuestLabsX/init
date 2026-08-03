@@ -5,6 +5,7 @@
 #include <asm/errno.h>
 #include <linux/fcntl.h>
 #include <linux/capability.h>
+#include <linux/inotify.h>
 #include <linux/mount.h>
 #include <linux/mman.h>
 #include <linux/prctl.h>
@@ -74,6 +75,25 @@ enum
     K_CAP_LAST_CAP    = CAP_LAST_CAP,
     K_CLOCK_REALTIME  = CLOCK_REALTIME,
     K_CLOCK_BOOTTIME  = CLOCK_BOOTTIME,
+    K_IN_ACCESS       = IN_ACCESS,
+    K_IN_MODIFY       = IN_MODIFY,
+    K_IN_ATTRIB       = IN_ATTRIB,
+    K_IN_CLOSE_WRITE  = IN_CLOSE_WRITE,
+    K_IN_MOVED_FROM   = IN_MOVED_FROM,
+    K_IN_MOVED_TO     = IN_MOVED_TO,
+    K_IN_CREATE       = IN_CREATE,
+    K_IN_DELETE       = IN_DELETE,
+    K_IN_DELETE_SELF  = IN_DELETE_SELF,
+    K_IN_MOVE_SELF    = IN_MOVE_SELF,
+    K_IN_Q_OVERFLOW   = IN_Q_OVERFLOW,
+    K_IN_IGNORED      = IN_IGNORED,
+    K_IN_ONLYDIR      = IN_ONLYDIR,
+    K_IN_ISDIR        = IN_ISDIR,
+    K_INOTIFY_EVENT_SIZE = sizeof(struct inotify_event),
+    K_INOTIFY_WD_OFFSET = offsetof(struct inotify_event, wd),
+    K_INOTIFY_MASK_OFFSET = offsetof(struct inotify_event, mask),
+    K_INOTIFY_COOKIE_OFFSET = offsetof(struct inotify_event, cookie),
+    K_INOTIFY_LEN_OFFSET = offsetof(struct inotify_event, len),
 };
 
 static const unsigned long long K_REBOOT_MAGIC1 = (unsigned long long)LINUX_REBOOT_MAGIC1;
@@ -185,6 +205,20 @@ enum
 #undef LINUX_REBOOT_CMD_POWER_OFF
 #undef WDIOC_KEEPALIVE
 #undef WDIOC_SETTIMEOUT
+#undef IN_ACCESS
+#undef IN_MODIFY
+#undef IN_ATTRIB
+#undef IN_CLOSE_WRITE
+#undef IN_MOVED_FROM
+#undef IN_MOVED_TO
+#undef IN_CREATE
+#undef IN_DELETE
+#undef IN_DELETE_SELF
+#undef IN_MOVE_SELF
+#undef IN_Q_OVERFLOW
+#undef IN_IGNORED
+#undef IN_ONLYDIR
+#undef IN_ISDIR
 #undef SEEK_SET
 #undef SEEK_END
 #undef F_GETFL
@@ -271,6 +305,9 @@ SAME(SYS_renameat, __NR_renameat);
 #endif
 SAME(SYS_faccessat, __NR_faccessat);
 SAME(SYS_pipe2, __NR_pipe2);
+SAME(SYS_inotify_init1, __NR_inotify_init1);
+SAME(SYS_inotify_add_watch, __NR_inotify_add_watch);
+SAME(SYS_inotify_rm_watch, __NR_inotify_rm_watch);
 SAME(SYS_getrandom, __NR_getrandom);
 SAME(SYS_rt_sigaction, __NR_rt_sigaction);
 SAME(SYS_rt_sigprocmask, __NR_rt_sigprocmask);
@@ -369,6 +406,26 @@ SAME(CAP_LAST_CAP, K_CAP_LAST_CAP);
 
 SAME(CLOCK_REALTIME, K_CLOCK_REALTIME);
 SAME(CLOCK_BOOTTIME, K_CLOCK_BOOTTIME);
+
+SAME(sizeof(KInotifyEvent), K_INOTIFY_EVENT_SIZE);
+SAME(offsetof(KInotifyEvent, wd), K_INOTIFY_WD_OFFSET);
+SAME(offsetof(KInotifyEvent, mask), K_INOTIFY_MASK_OFFSET);
+SAME(offsetof(KInotifyEvent, cookie), K_INOTIFY_COOKIE_OFFSET);
+SAME(offsetof(KInotifyEvent, len), K_INOTIFY_LEN_OFFSET);
+SAME(IN_ACCESS, K_IN_ACCESS);
+SAME(IN_MODIFY, K_IN_MODIFY);
+SAME(IN_ATTRIB, K_IN_ATTRIB);
+SAME(IN_CLOSE_WRITE, K_IN_CLOSE_WRITE);
+SAME(IN_MOVED_FROM, K_IN_MOVED_FROM);
+SAME(IN_MOVED_TO, K_IN_MOVED_TO);
+SAME(IN_CREATE, K_IN_CREATE);
+SAME(IN_DELETE, K_IN_DELETE);
+SAME(IN_DELETE_SELF, K_IN_DELETE_SELF);
+SAME(IN_MOVE_SELF, K_IN_MOVE_SELF);
+SAME(IN_Q_OVERFLOW, K_IN_Q_OVERFLOW);
+SAME(IN_IGNORED, K_IN_IGNORED);
+SAME(IN_ONLYDIR, K_IN_ONLYDIR);
+SAME(IN_ISDIR, K_IN_ISDIR);
 
 /* These constants exceed enum width on 32-bit targets */
 int AbiCheckWide(void);

@@ -48,6 +48,11 @@ A machine without a working RTC schedules calendar tasks against its current
 clock. They may run early and are re-dated after the first successful SNTP sync.
 An unsynced clock never blocks them.
 
+When `FEATURE_TASK_DISCOVERY` is enabled, init applies `/tasks` changes from the
+event loop. Unchanged tasks keep their runtime state. Removed tasks stay stopped
+and replacements wait for the old process group and probe to drain. Without
+inotify, init rescans at `CFG_TASK_SCAN_NS`.
+
 ## Probes
 
 An optional executable sibling checks whether an `always` task is working:

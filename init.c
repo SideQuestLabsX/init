@@ -86,6 +86,9 @@ typedef unsigned long usize;
   #define SYS_faccessat       269
   #define SYS_ppoll           271
   #define SYS_pipe2           293
+  #define SYS_inotify_init1   294
+  #define SYS_inotify_add_watch 254
+  #define SYS_inotify_rm_watch 255
   #define SYS_getrandom       318
 
   #define INIT_ARCH_NAME      "x86_64"
@@ -143,6 +146,9 @@ typedef unsigned long usize;
   #define SYS_faccessat       307
   #define SYS_ppoll_time64    414
   #define SYS_pipe2           331
+  #define SYS_inotify_init1   332
+  #define SYS_inotify_add_watch 292
+  #define SYS_inotify_rm_watch 293
   #define SYS_getrandom       355
 
   #define INIT_ARCH_NAME      "x86"
@@ -212,6 +218,9 @@ typedef unsigned long usize;
   #define SYS_faccessat       48
   #define SYS_ppoll           73
   #define SYS_pipe2           59
+  #define SYS_inotify_init1   26
+  #define SYS_inotify_add_watch 27
+  #define SYS_inotify_rm_watch 28
   #define SYS_getrandom       278
 
   #if defined(__aarch64__)
@@ -277,6 +286,9 @@ typedef unsigned long usize;
   #define SYS_faccessat       334
   #define SYS_ppoll_time64    414
   #define SYS_pipe2           359
+  #define SYS_inotify_init1   360
+  #define SYS_inotify_add_watch 317
+  #define SYS_inotify_rm_watch 318
   #define SYS_getrandom       384
 
   #define INIT_ARCH_NAME      "arm"
@@ -338,6 +350,9 @@ typedef unsigned long usize;
   #define SYS_faccessat       4300
   #define SYS_ppoll_time64    4414
   #define SYS_pipe2           4328
+  #define SYS_inotify_init1   4329
+  #define SYS_inotify_add_watch 4285
+  #define SYS_inotify_rm_watch 4286
   #define SYS_getrandom       4353
 
   #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -640,6 +655,33 @@ typedef struct
     u8  type;
     char name[];
 } KDirent64;
+
+typedef struct
+{
+    i32 wd;
+    u32 mask;
+    u32 cookie;
+    u32 len;
+    char name[];
+} KInotifyEvent;
+
+_Static_assert(sizeof(KInotifyEvent) == 16, "inotify event ABI changed");
+
+/* inotify event masks */
+#define IN_ACCESS       0x00000001u
+#define IN_MODIFY       0x00000002u
+#define IN_ATTRIB       0x00000004u
+#define IN_CLOSE_WRITE  0x00000008u
+#define IN_MOVED_FROM   0x00000040u
+#define IN_MOVED_TO     0x00000080u
+#define IN_CREATE       0x00000100u
+#define IN_DELETE       0x00000200u
+#define IN_DELETE_SELF  0x00000400u
+#define IN_MOVE_SELF    0x00000800u
+#define IN_Q_OVERFLOW   0x00004000u
+#define IN_IGNORED      0x00008000u
+#define IN_ONLYDIR      0x01000000u
+#define IN_ISDIR        0x40000000u
 
 /* sockets */
 #define AF_INET       2
@@ -1976,6 +2018,8 @@ bool SntpParseReply(const u8 *pkt, usize len, u64 expectTransmitNtp, u64 *outUni
 #define TS_IDLE    3u   /* periodic, waiting for the next interval */
 #define TS_DONE    4u   /* boot task completed cleanly */
 #define TS_FAILED  5u   /* gave up respawning */
+#define TS_REMOVED 6u   /* absent from the latest complete scan */
+#define TS_RETIRED 7u   /* waiting for an old generation to drain */
 
 #define STF_CRITICAL 0x1u
 #define STF_PROBED   0x2u
@@ -2306,6 +2350,15 @@ static inline isize SysAccess(const char *path, i32 mode)
 
 static inline isize SysGetdents64(i32 fd, void *buf, usize n)
 { return SysCall3(SYS_getdents64, fd, (isize)buf, (isize)n); }
+
+static inline isize SysInotifyInit1(i32 flags)
+{ return SysCall1(SYS_inotify_init1, flags); }
+
+static inline isize SysInotifyAddWatch(i32 fd, const char *path, u32 mask)
+{ return SysCall3(SYS_inotify_add_watch, fd, (isize)path, (isize)(usize)mask); }
+
+static inline isize SysInotifyRmWatch(i32 fd, i32 wd)
+{ return SysCall2(SYS_inotify_rm_watch, fd, wd); }
 
 static inline isize SysChdir(const char *path)
 { return SysCall1(SYS_chdir, (isize)path); }
@@ -2640,7 +2693,13 @@ typedef struct
     u8   errPolicy;
 
     u32  state;
+    bool bPresent;
+    bool bSeen;
+    bool bChanged;
+    bool bRetiring;
+    bool bReplacementPending;
     i32  pid;
+    i32  groupPid;
     u64  startedNs;
     u64  nextRunNs;
     u64  backoffNs;
@@ -2651,6 +2710,7 @@ typedef struct
     i32  lastSignal;
     u64  lastExitNs;
     u64  killDeadlineNs;
+    u64  retireDeadlineNs;
     bool bUnhealthyKill;
 
     i32     outFd;
@@ -2664,12 +2724,22 @@ typedef struct
     i32  lastProbeRc;
     u64  lastProbeNs;
     u32  probeFails;
-    bool bProbeKilled;   /* timeout already counted */
+    bool bProbeKilled;   /* result ignored after timeout or cancellation */
+    u64  probeKillDeadlineNs;
 
     u64  lastCpuTicks;
     u64  lastSampleNs;
     char lastProcState;
 } Task;
+
+#define TASK_WATCH_MAX (CFG_MAX_TASK_DIRS + 1u)
+
+typedef struct
+{
+    i32  wd;
+    bool bActive;
+    char path[CFG_PATH_MAX];
+} TaskWatch;
 
 static const char *TaskName(const Task *t)
 {
@@ -2692,6 +2762,13 @@ typedef struct
 
     Task         task[CFG_MAX_TASKS];
     usize        taskCount;
+    TaskWatch    taskWatch[TASK_WATCH_MAX];
+    i32          taskWatchFd;
+    bool         bTaskScanPending;
+    bool         bTaskScanRetry;
+    u64          taskScanNextNs;
+    usize        taskReportedCount;
+    bool         bTaskScanReported;
     PersistEntry persist[CFG_MAX_TASKS];
     usize        persistCount;
 
@@ -2736,6 +2813,15 @@ bool TaskAnyAlive(const InitState *st);
 u64  TaskNextDeadline(const InitState *st, u64 nowNs);
 void TaskDrain(InitState *st, Task *t);
 void TaskPublish(InitState *st);
+
+#if FEATURE_TASK_DISCOVERY
+static void TaskWatchOpen(InitState *st);
+static void TaskWatchDisable(InitState *st);
+static void TaskWatchRefresh(InitState *st);
+static void TaskWatchDrain(InitState *st);
+#endif
+static void TaskRetire(InitState *st, Task *t, bool bReplacement, u64 nowNs);
+static bool TaskCanReuse(const Task *t);
 
 static void ScheduleStateLoad(InitState *st);
 #if !OFFLINE_MODE
@@ -2805,15 +2891,43 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
     for(;;)
     {
         isize n = SysGetdents64((i32)fd, buf, sizeof(buf));
-        if(n <= 0)
+        if(n == -EINTR)
+            continue;
+        if(n == 0)
             break;
+        if(n < 0)
+        {
+            SysClose((i32)fd);
+            return false;
+        }
 
         usize off = 0;
-        while(off + sizeof(KDirent64) <= (usize)n)
+        while(off < (usize)n)
         {
+            usize headerBytes = offsetof(KDirent64, name);
+            if((usize)n - off < headerBytes)
+            {
+                SysClose((i32)fd);
+                return false;
+            }
+
             const KDirent64 *d = (const KDirent64 *)(buf + off);
-            if(d->reclen == 0 || off + d->reclen > (usize)n)
-                break;
+            if((usize)d->reclen < headerBytes + 1 ||
+               (usize)d->reclen > (usize)n - off)
+            {
+                SysClose((i32)fd);
+                return false;
+            }
+
+            usize nameBytes = (usize)d->reclen - headerBytes;
+            usize nameLen = 0;
+            while(nameLen < nameBytes && d->name[nameLen] != '\0')
+                nameLen++;
+            if(nameLen == 0 || nameLen == nameBytes)
+            {
+                SysClose((i32)fd);
+                return false;
+            }
             off += d->reclen;
 
             if(d->name[0] == '.')
@@ -2821,7 +2935,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
             if(d->type != DT_UNKNOWN && d->type != wantType)
                 continue;
 
-            if(StrLen(d->name) >= CFG_PATH_MAX)
+            if(nameLen >= CFG_PATH_MAX)
             {
                 LogF("%s/%s: name too long, skipped", path, d->name);
                 continue;
@@ -2836,7 +2950,10 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
     SysClose((i32)fd);
 
     if(dropped != 0)
+    {
         LogF("%s: %zu entries omitted after limit %zu", path, dropped, maxEntries);
+        return false;
+    }
     out->name = names;
     out->count = count;
     return true;
@@ -3252,7 +3369,8 @@ static void ScheduleStateRedate(InitState *st, u64 nowNs)
     for(usize i = 0; i < st->taskCount; i++)
     {
         Task *t = &st->task[i];
-        if(t->schedule != SCHED_EVERY || !t->bHasLastRun || t->state == TS_RUNNING)
+        if(!t->bPresent || t->bRetiring || t->schedule != SCHED_EVERY ||
+           !t->bHasLastRun || t->state == TS_RUNNING)
             continue;
         t->nextRunNs = PersistProjectDeadline(t->lastRunRealNs, t->intervalNs,
                                                nowRealNs, nowNs);
@@ -3334,7 +3452,8 @@ static void TaskRedateCal(InitState *st, u64 nowNs)
     for(usize i = 0; i < st->taskCount; i++)
     {
         Task *t = &st->task[i];
-        if(t->schedule != SCHED_CAL || t->state == TS_RUNNING)
+        if(!t->bPresent || t->bRetiring || t->schedule != SCHED_CAL ||
+           t->state == TS_RUNNING)
             continue;
 
         u64 next = TaskNextRunNs(t, nowNs);
@@ -3351,35 +3470,469 @@ static void TaskRedateCal(InitState *st, u64 nowNs)
 }
 #endif
 
-void TaskScanAll(InitState *st)
+static bool TaskParseSchedule(const char *name, u32 *schedule, u64 *intervalNs,
+                              CalSpec *cal)
 {
+    *intervalNs = 0;
+    *cal = (CalSpec){ 0, 0, 0 };
+
+    if(StrEq(name, "always"))
+    {
+        *schedule = SCHED_ALWAYS;
+        return true;
+    }
+    if(StrEq(name, "boot"))
+    {
+        *schedule = SCHED_BOOT;
+        return true;
+    }
+    if(ParseCalendar(name, cal))
+    {
+        *schedule = SCHED_CAL;
+        return true;
+    }
+    if(ParseDuration(name, intervalNs) && *intervalNs != 0)
+    {
+        *schedule = SCHED_EVERY;
+        return true;
+    }
+    return false;
+}
+
+static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
+                          const char *name, u32 schedule, u64 intervalNs,
+                          CalSpec cal, u64 nowNs)
+{
+    memset(t, 0, sizeof(*t));
+    if(StrEndsWith(name, ".check"))
+        return false;
+    if(StrLen(name) >= CFG_NAME_MAX)
+    {
+        LogF("%s/%s: task name too long, skipped", dirPath, name);
+        return false;
+    }
+    if(!PathJoinOk(t->path, sizeof(t->path), dirPath, name))
+    {
+        LogF("%s/%s: task path too long, skipped", dirPath, name);
+        return false;
+    }
+    t->nameOffset = (u16)(StrLen(t->path) - StrLen(name));
+
+    if(SysAccess(t->path, X_OK) < 0)
+    {
+        LogF("%s: not executable, skipped", TaskName(t));
+        return false;
+    }
+
+#if FEATURE_EXEC_PROBES
+    char checkPath[CFG_PATH_MAX];
+    if(!TaskCheckPath(t, checkPath, sizeof(checkPath)))
+    {
+        LogF("%s: check path too long, skipped", TaskName(t));
+        return false;
+    }
+    t->bHasCheck = SysAccess(checkPath, X_OK) == 0;
+#endif
+
+    t->schedule = schedule;
+    t->intervalNs = intervalNs;
+    t->cal = cal;
+    TaskApplyRule(t);
+    ScheduleStateApply(t, st);
+
+    t->outFd = -1;
+    t->errFd = -1;
+    t->lastProbeRc = -1;
+    t->state = TS_PENDING;
+    t->bPresent = true;
+    t->nextRunNs = TaskNextRunNs(t, nowNs);
+    return true;
+}
+
+static Task *TaskFindPath(InitState *st, const char *path)
+{
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        if(StrEq(st->task[i].path, path))
+            return &st->task[i];
+    }
+    return NULL;
+}
+
+static usize TaskPresentCount(const InitState *st)
+{
+    usize count = 0;
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        if(st->task[i].bPresent)
+            count++;
+    }
+    return count;
+}
+
+static bool TaskSpecEqual(const Task *a, const Task *b)
+{
+    return a->schedule == b->schedule &&
+           a->intervalNs == b->intervalNs &&
+           a->cal.kind == b->cal.kind &&
+           a->cal.param == b->cal.param &&
+           a->cal.daySec == b->cal.daySec &&
+           a->bHasCheck == b->bHasCheck &&
+           a->uid == b->uid &&
+           a->gid == b->gid &&
+           a->capMask == b->capMask &&
+           a->bCritical == b->bCritical &&
+           a->maxRestarts == b->maxRestarts &&
+           a->stableNs == b->stableNs &&
+           a->probeIntervalNs == b->probeIntervalNs &&
+           a->probeTimeoutNs == b->probeTimeoutNs &&
+           a->graceNs == b->graceNs &&
+           a->outPolicy == b->outPolicy &&
+           a->errPolicy == b->errPolicy;
+}
+
+static void TaskInstallSpec(Task *dst, const Task *spec)
+{
+    *dst = *spec;
+    dst->bPresent = true;
+    dst->bSeen = true;
+}
+
+static bool TaskReconcileCandidate(InitState *st, const Task *spec, u64 nowNs)
+{
+    Task *t = TaskFindPath(st, spec->path);
+    if(t == NULL)
+    {
+        for(usize i = 0; i < st->taskCount; i++)
+        {
+            if(!st->task[i].bPresent && TaskCanReuse(&st->task[i]))
+            {
+                t = &st->task[i];
+                break;
+            }
+        }
+        if(t == NULL)
+        {
+            if(st->taskCount == CFG_MAX_TASKS)
+            {
+                LogF("%s: task table full, skipped", spec->path);
+                return true;
+            }
+            t = &st->task[st->taskCount++];
+        }
+        TaskInstallSpec(t, spec);
+        return false;
+    }
+
+    t->bSeen = true;
+    bool bWasPresent = t->bPresent;
+    t->bPresent = true;
+    bool bChanged = !bWasPresent || t->bChanged || !TaskSpecEqual(t, spec);
+    t->bChanged = false;
+
+    if(t->bRetiring)
+    {
+        t->bReplacementPending = true;
+        if(TaskCanReuse(t))
+        {
+            LogF("%s: replacement ready", spec->path);
+            TaskInstallSpec(t, spec);
+        }
+        return false;
+    }
+
+    if(!bChanged)
+        return false;
+    if(TaskCanReuse(t))
+    {
+        LogF("%s: restarting after discovery change", spec->path);
+        TaskInstallSpec(t, spec);
+        return false;
+    }
+
+    LogF("%s: retiring after discovery change", TaskName(t));
+    TaskRetire(st, t, true, nowNs);
+    return false;
+}
+
+#if FEATURE_TASK_DISCOVERY
+
+#define TASK_WATCH_MASK (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | \
+                         IN_CLOSE_WRITE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF)
+#define TASK_WATCH_BUFFER_BYTES 4096
+
+static TaskWatch *TaskWatchFind(InitState *st, i32 wd)
+{
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        if(st->taskWatch[i].wd == wd)
+            return &st->taskWatch[i];
+    }
+    return NULL;
+}
+
+static bool TaskWatchEnsure(InitState *st, const char *path)
+{
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        TaskWatch *watch = &st->taskWatch[i];
+        if(watch->wd >= 0 && StrEq(watch->path, path))
+        {
+            watch->bActive = true;
+            return true;
+        }
+    }
+
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        TaskWatch *watch = &st->taskWatch[i];
+        if(watch->wd >= 0)
+            continue;
+
+        isize wd = SysInotifyAddWatch(st->taskWatchFd, path,
+                                      TASK_WATCH_MASK | IN_ONLYDIR);
+        if(wd < 0)
+        {
+            LogF("task watch %s failed (%d)", path, (i32)wd);
+            return false;
+        }
+        watch->wd = (i32)wd;
+        watch->bActive = true;
+        StrCopy(watch->path, sizeof(watch->path), path);
+        return true;
+    }
+
+    LogF("task watch table full, %s not watched", path);
+    return false;
+}
+
+static void TaskWatchOpen(InitState *st)
+{
+    st->taskWatchFd = -1;
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        st->taskWatch[i].wd = -1;
+        st->taskWatch[i].bActive = false;
+        st->taskWatch[i].path[0] = '\0';
+    }
+
+    isize fd = SysInotifyInit1(O_NONBLOCK | O_CLOEXEC);
+    if(fd < 0)
+    {
+        LogF("task discovery: inotify unavailable (%d), using periodic scans", (i32)fd);
+        return;
+    }
+    st->taskWatchFd = (i32)fd;
+}
+
+static void TaskWatchDisable(InitState *st)
+{
+    if(st->taskWatchFd >= 0)
+        SysClose(st->taskWatchFd);
+    st->taskWatchFd = -1;
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        st->taskWatch[i].wd = -1;
+        st->taskWatch[i].bActive = false;
+        st->taskWatch[i].path[0] = '\0';
+    }
+}
+
+static void TaskWatchRefresh(InitState *st)
+{
+    if(st->taskWatchFd < 0)
+        return;
+
     usize mark = ArenaMark(&st->arena);
     DirList dirs;
-
     if(!DirRead(CFG_TASK_DIR, &st->arena, &dirs, CFG_MAX_TASK_DIRS, DT_DIR))
     {
-        LogF("no %s directory, nothing to run", CFG_TASK_DIR);
+        TaskWatchDisable(st);
         ArenaReset(&st->arena, mark);
         return;
     }
 
-    u64 nowNs = SysBootNs();
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+        st->taskWatch[i].bActive = false;
+    bool bOk = TaskWatchEnsure(st, CFG_TASK_DIR);
 
     for(usize d = 0; d < dirs.count; d++)
     {
         u32 schedule;
-        u64 intervalNs = 0;
-        CalSpec cal = { 0, 0, 0 };
+        u64 intervalNs;
+        CalSpec cal;
+        if(!TaskParseSchedule(dirs.name[d], &schedule, &intervalNs, &cal))
+            continue;
 
-        if(StrEq(dirs.name[d], "always"))
-            schedule = SCHED_ALWAYS;
-        else if(StrEq(dirs.name[d], "boot"))
-            schedule = SCHED_BOOT;
-        else if(ParseCalendar(dirs.name[d], &cal))
-            schedule = SCHED_CAL;
-        else if(ParseDuration(dirs.name[d], &intervalNs) && intervalNs != 0)
-            schedule = SCHED_EVERY;
-        else
+        char path[CFG_PATH_MAX];
+        if(PathJoinOk(path, sizeof(path), CFG_TASK_DIR, dirs.name[d]))
+        {
+            if(!TaskWatchEnsure(st, path))
+                bOk = false;
+        }
+    }
+
+    if(!bOk)
+    {
+        TaskWatchDisable(st);
+        ArenaReset(&st->arena, mark);
+        return;
+    }
+
+    for(usize i = 0; i < ARRAY_LEN(st->taskWatch); i++)
+    {
+        TaskWatch *watch = &st->taskWatch[i];
+        if(watch->wd >= 0 && !watch->bActive)
+        {
+            SysInotifyRmWatch(st->taskWatchFd, watch->wd);
+            watch->wd = -1;
+            watch->path[0] = '\0';
+        }
+    }
+    ArenaReset(&st->arena, mark);
+}
+
+static bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap)
+{
+    if(event->len == 0)
+        return false;
+
+    usize limit = event->len;
+    for(usize i = 0; i < limit; i++)
+    {
+        if(event->name[i] == '\0')
+        {
+            StrCopyN(name, cap, event->name, i);
+            return i < cap;
+        }
+    }
+    return false;
+}
+
+static void TaskMarkPathChanged(InitState *st, const char *path)
+{
+    char taskPath[CFG_PATH_MAX];
+    StrCopy(taskPath, sizeof(taskPath), path);
+    if(StrEndsWith(taskPath, ".check"))
+    {
+        usize len = StrLen(taskPath);
+        taskPath[len - 6] = '\0';
+    }
+
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        if(StrEq(st->task[i].path, taskPath))
+            st->task[i].bChanged = true;
+    }
+}
+
+static void TaskMarkAllChanged(InitState *st)
+{
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        if(st->task[i].bPresent)
+            st->task[i].bChanged = true;
+    }
+}
+
+static void TaskWatchDrain(InitState *st)
+{
+    u8 buffer[TASK_WATCH_BUFFER_BYTES] __attribute__((aligned(8)));
+    for(;;)
+    {
+        isize n = SysRead(st->taskWatchFd, buffer, sizeof(buffer));
+        if(n == -EINTR)
+            continue;
+        if(n == -EAGAIN)
+            return;
+        if(n <= 0)
+        {
+            LogF("task discovery: inotify read failed (%d)", (i32)n);
+            TaskWatchDisable(st);
+            st->bTaskScanPending = true;
+            return;
+        }
+
+        usize off = 0;
+        while(off < (usize)n)
+        {
+            st->bTaskScanPending = true;
+            if((usize)n - off < sizeof(KInotifyEvent))
+            {
+                LogF("task discovery: malformed inotify event");
+                TaskMarkAllChanged(st);
+                break;
+            }
+
+            const KInotifyEvent *event = (const KInotifyEvent *)(buffer + off);
+            usize size = sizeof(KInotifyEvent) + (usize)event->len;
+            if(size < sizeof(KInotifyEvent) || size > (usize)n - off)
+            {
+                LogF("task discovery: malformed inotify event length");
+                TaskMarkAllChanged(st);
+                break;
+            }
+
+            if((event->mask & IN_Q_OVERFLOW) != 0)
+            {
+                LogF("task discovery: inotify queue overflow");
+                TaskMarkAllChanged(st);
+            }
+            else
+            {
+                TaskWatch *watch = TaskWatchFind(st, event->wd);
+                char name[CFG_NAME_MAX];
+                if(watch != NULL && (event->mask & IN_ISDIR) == 0 &&
+                   TaskWatchEventName(event, name, sizeof(name)))
+                {
+                    char path[CFG_PATH_MAX];
+                    if(PathJoinOk(path, sizeof(path), watch->path, name))
+                        TaskMarkPathChanged(st, path);
+                }
+                if((event->mask & IN_IGNORED) != 0 && watch != NULL)
+                {
+                    watch->wd = -1;
+                    watch->path[0] = '\0';
+                }
+            }
+            off += size;
+        }
+    }
+}
+
+#endif
+
+void TaskScanAll(InitState *st)
+{
+    usize mark = ArenaMark(&st->arena);
+    DirList dirs;
+    u64 nowNs = SysBootNs();
+    bool bComplete = true;
+    bool bRetry = false;
+    st->bTaskScanPending = false;
+    st->bTaskScanRetry = false;
+    st->taskScanNextNs = nowNs + CFG_TASK_SCAN_NS;
+
+    for(usize i = 0; i < st->taskCount; i++)
+        st->task[i].bSeen = false;
+
+    if(!DirRead(CFG_TASK_DIR, &st->arena, &dirs, CFG_MAX_TASK_DIRS, DT_DIR))
+    {
+        LogF("task scan: cannot read %s, preserving current tasks", CFG_TASK_DIR);
+#if FEATURE_TASK_DISCOVERY
+        TaskWatchDisable(st);
+#endif
+        st->bTaskScanRetry = true;
+        ArenaReset(&st->arena, mark);
+        return;
+    }
+
+    for(usize d = 0; d < dirs.count; d++)
+    {
+        u32 schedule;
+        u64 intervalNs;
+        CalSpec cal;
+        if(!TaskParseSchedule(dirs.name[d], &schedule, &intervalNs, &cal))
         {
             LogF("%s: not a schedule, ignored", dirs.name[d]);
             continue;
@@ -3389,6 +3942,7 @@ void TaskScanAll(InitState *st)
         if(!PathJoinOk(dirPath, sizeof(dirPath), CFG_TASK_DIR, dirs.name[d]))
         {
             LogF("%s/%s: schedule path too long, skipped", CFG_TASK_DIR, dirs.name[d]);
+            bComplete = false;
             continue;
         }
 
@@ -3396,64 +3950,60 @@ void TaskScanAll(InitState *st)
         DirList files;
         if(!DirRead(dirPath, &st->arena, &files, CFG_MAX_TASKS, DT_REG))
         {
+            bComplete = false;
             ArenaReset(&st->arena, inner);
             continue;
         }
 
-        for(usize f = 0; f < files.count && st->taskCount < CFG_MAX_TASKS; f++)
+        for(usize f = 0; f < files.count; f++)
         {
-            if(StrEndsWith(files.name[f], ".check"))
+            Task spec;
+            if(!TaskBuildSpec(st, &spec, dirPath, files.name[f], schedule,
+                              intervalNs, cal, nowNs))
                 continue;
-            if(StrLen(files.name[f]) >= CFG_NAME_MAX)
-            {
-                LogF("%s/%s: task name too long, skipped", dirPath, files.name[f]);
-                continue;
-            }
-
-            Task *t = &st->task[st->taskCount];
-            memset(t, 0, sizeof(*t));
-            if(!PathJoinOk(t->path, sizeof(t->path), dirPath, files.name[f]))
-            {
-                LogF("%s/%s: task path too long, skipped", dirPath, files.name[f]);
-                continue;
-            }
-            t->nameOffset = (u16)(StrLen(t->path) - StrLen(files.name[f]));
-
-            if(SysAccess(t->path, X_OK) < 0)
-            {
-                LogF("%s: not executable, skipped", TaskName(t));
-                continue;
-            }
-
-#if FEATURE_EXEC_PROBES
-            char checkPath[CFG_PATH_MAX];
-            if(!TaskCheckPath(t, checkPath, sizeof(checkPath)))
-            {
-                LogF("%s: check path too long, skipped", TaskName(t));
-                continue;
-            }
-            t->bHasCheck = SysAccess(checkPath, X_OK) == 0;
-#endif
-
-            t->schedule = schedule;
-            t->intervalNs = intervalNs;
-            t->cal = cal;
-            TaskApplyRule(t);
-            ScheduleStateApply(t, st);
-
-            t->outFd = -1;
-            t->errFd = -1;
-            t->lastProbeRc = -1;
-            t->state = TS_PENDING;
-            t->nextRunNs = TaskNextRunNs(t, nowNs);
-            st->taskCount++;
+            if(TaskReconcileCandidate(st, &spec, nowNs))
+                bRetry = true;
         }
 
         ArenaReset(&st->arena, inner);
     }
 
+    if(bComplete)
+    {
+        for(usize i = 0; i < st->taskCount; i++)
+        {
+            Task *t = &st->task[i];
+            if(t->bSeen || !t->bPresent)
+                continue;
+
+            t->bPresent = false;
+            t->bChanged = false;
+            t->bReplacementPending = false;
+            if(TaskCanReuse(t))
+            {
+                t->state = TS_REMOVED;
+                t->bRetiring = false;
+            }
+            else
+            {
+                LogF("%s: removed, retiring", TaskName(t));
+                TaskRetire(st, t, false, nowNs);
+            }
+        }
+    }
+
+#if FEATURE_TASK_DISCOVERY
+    TaskWatchRefresh(st);
+#endif
+    st->bTaskScanRetry = !bComplete || bRetry;
     ArenaReset(&st->arena, mark);
-    LogF("%zu tasks in %s", st->taskCount, CFG_TASK_DIR);
+    usize presentCount = TaskPresentCount(st);
+    if(!st->bTaskScanReported || st->taskReportedCount != presentCount)
+    {
+        LogF("%zu tasks in %s", presentCount, CFG_TASK_DIR);
+        st->taskReportedCount = presentCount;
+        st->bTaskScanReported = true;
+    }
 }
 
 static void TaskClosePipes(Task *t)
@@ -3470,15 +4020,28 @@ static void TaskClosePipes(Task *t)
     }
 }
 
-static void SignalChild(i32 pid, i32 sig)
+static void SignalGroup(i32 pid, i32 sig)
 {
     if(pid <= 1)
         return;
     SysKill(-pid, sig);
+}
+
+static void SignalChild(i32 pid, i32 sig)
+{
+    if(pid <= 1)
+        return;
+    SignalGroup(pid, sig);
     SysKill(pid, sig);
 }
 
-static void ProbeDiscard(Task *t, bool bLog)
+static bool TaskCanReuse(const Task *t)
+{
+    return t->pid <= 0 && t->groupPid <= 0 && t->probePid <= 0 &&
+           t->outFd < 0 && t->errFd < 0;
+}
+
+static void ProbeCancel(Task *t, bool bLog, u64 nowNs)
 {
     if(t->probePid <= 0)
         return;
@@ -3486,8 +4049,38 @@ static void ProbeDiscard(Task *t, bool bLog)
     if(bLog)
         LogF("%s: cancelling probe pid %d", TaskName(t), t->probePid);
     SignalChild(t->probePid, SIGKILL);
-    t->probePid = 0;
-    t->bProbeKilled = false;
+    t->bProbeKilled = true;
+    t->probeKillDeadlineNs = nowNs + CFG_RESTART_GRACE_NS;
+}
+
+static void TaskRetire(InitState *st, Task *t, bool bReplacement, u64 nowNs)
+{
+    bool bWasRetiring = t->bRetiring;
+    t->bRetiring = true;
+    t->bReplacementPending = bReplacement;
+    t->state = TS_RETIRED;
+    if(!bWasRetiring)
+    {
+        if(t->pid > 0 || t->groupPid > 0 || t->probePid > 0)
+            t->retireDeadlineNs = nowNs + CFG_RESTART_GRACE_NS;
+        if(t->pid > 0)
+        {
+            SignalChild(t->pid, SIGTERM);
+        }
+        else if(t->groupPid > 0)
+        {
+            SignalGroup(t->groupPid, SIGTERM);
+        }
+        ProbeCancel(t, true, nowNs);
+    }
+
+    if(t->pid <= 0 && t->groupPid <= 0 && t->probePid <= 0)
+    {
+        TaskDrain(st, t);
+        TaskClosePipes(t);
+    }
+    if(TaskCanReuse(t))
+        st->bTaskScanPending = true;
 }
 
 #if FEATURE_LOG_CAPTURE
@@ -3555,6 +4148,7 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
     t->errFd = errPipe[0];
 
     t->pid = pid;
+    t->groupPid = pid;
     t->state = TS_RUNNING;
     t->startedNs = nowNs;
     t->lastSampleNs = nowNs;
@@ -3609,13 +4203,15 @@ void TaskDrain(InitState *st, Task *t)
 static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
 {
     bool bUnhealthyExit = t->bUnhealthyKill;
+    bool bRetiring = t->bRetiring;
 
     SignalChild(t->pid, SIGKILL);
     t->lastExitNs = nowNs;
     t->pid = 0;
     t->killDeadlineNs = 0;
     t->bUnhealthyKill = false;
-    ProbeDiscard(t, true);
+    if(!bRetiring)
+        ProbeCancel(t, true, nowNs);
 
     if(WIFEXITED(status))
     {
@@ -3632,7 +4228,15 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     u8 idx = (u8)(t - st->task);
     LogFlushPartial(&t->outLine, LOG_SRC_OUT, idx, t->outPolicy);
     LogFlushPartial(&t->errLine, LOG_SRC_ERR, idx, t->errPolicy);
-    TaskClosePipes(t);
+    if(t->groupPid <= 0)
+        TaskClosePipes(t);
+
+    if(bRetiring)
+    {
+        t->state = t->bPresent ? TS_RETIRED : TS_REMOVED;
+        st->bTaskScanPending = true;
+        return;
+    }
 
     if(st->bShutdown)
     {
@@ -3700,11 +4304,92 @@ bool TaskReap(InitState *st, i32 pid, i32 status, u64 nowNs)
     return false;
 }
 
+static bool TaskGroupReap(InitState *st, Task *t, u64 nowNs)
+{
+    if(t->groupPid <= 0)
+        return false;
+
+    bool bProgress = false;
+    for(;;)
+    {
+        i32 status = 0;
+        isize pid = SysWait4(-t->groupPid, &status, WNOHANG);
+        if(pid == -EINTR)
+            continue;
+        if(pid == 0)
+            break;
+        if(pid == -ECHILD)
+        {
+            if(t->pid <= 0)
+            {
+                t->groupPid = 0;
+                TaskDrain(st, t);
+                u8 idx = (u8)(t - st->task);
+                LogFlushPartial(&t->outLine, LOG_SRC_OUT, idx, t->outPolicy);
+                LogFlushPartial(&t->errLine, LOG_SRC_ERR, idx, t->errPolicy);
+                TaskClosePipes(t);
+                if(t->bRetiring)
+                    st->bTaskScanPending = true;
+            }
+            break;
+        }
+        if(pid < 0)
+            break;
+
+        bProgress = true;
+        if((i32)pid == t->pid)
+            TaskOnExit(st, t, status, nowNs);
+    }
+    return bProgress;
+}
+
 void TaskTick(InitState *st, u64 nowNs)
 {
     for(usize i = 0; i < st->taskCount; i++)
     {
         Task *t = &st->task[i];
+
+        if(!t->bRetiring && t->probePid > 0 &&
+           t->probeKillDeadlineNs != 0 &&
+           nowNs >= t->probeKillDeadlineNs)
+            ProbeCancel(t, false, nowNs);
+
+        if(t->bRetiring)
+        {
+            if((t->groupPid > 0 || t->probePid > 0) &&
+               t->retireDeadlineNs != 0 &&
+               nowNs >= t->retireDeadlineNs)
+            {
+                LogF("%s: retirement grace expired, sending SIGKILL", TaskName(t));
+                if(t->pid > 0)
+                    SignalChild(t->pid, SIGKILL);
+                else if(t->groupPid > 0)
+                    SignalGroup(t->groupPid, SIGKILL);
+                ProbeCancel(t, false, nowNs);
+                t->retireDeadlineNs = nowNs + CFG_RESTART_GRACE_NS;
+            }
+            if(t->groupPid <= 0 && t->probePid <= 0)
+            {
+                TaskDrain(st, t);
+                TaskClosePipes(t);
+                if(TaskCanReuse(t))
+                {
+                    if(!t->bPresent)
+                    {
+                        t->bRetiring = false;
+                        t->bReplacementPending = false;
+                        t->state = TS_REMOVED;
+                    }
+                    else
+                        st->bTaskScanPending = true;
+                }
+            }
+            continue;
+        }
+        if(t->pid <= 0 && (t->groupPid > 0 || t->probePid > 0))
+            continue;
+        if(!t->bPresent)
+            continue;
 
         switch(t->state)
         {
@@ -3759,11 +4444,17 @@ void TaskTick(InitState *st, u64 nowNs)
 
 void TaskSignalAll(InitState *st, i32 sig)
 {
+    u64 nowNs = SysBootNs();
     for(usize i = 0; i < st->taskCount; i++)
     {
         Task *t = &st->task[i];
-        SignalChild(t->pid, sig);
-        ProbeDiscard(t, false);
+        if(t->pid > 0)
+            SignalChild(t->pid, sig);
+        else if(t->groupPid > 0)
+            SignalGroup(t->groupPid, sig);
+        else
+            SignalChild(t->pid, sig);
+        ProbeCancel(t, false, nowNs);
     }
 }
 
@@ -3771,7 +4462,8 @@ bool TaskAnyAlive(const InitState *st)
 {
     for(usize i = 0; i < st->taskCount; i++)
     {
-        if(st->task[i].pid > 0 || st->task[i].probePid > 0)
+        if(st->task[i].pid > 0 || st->task[i].groupPid > 0 ||
+           st->task[i].probePid > 0)
             return true;
     }
     return false;
@@ -3781,9 +4473,29 @@ u64 TaskNextDeadline(const InitState *st, u64 nowNs)
 {
     u64 best = nowNs + CFG_LOOP_MAX_WAIT_NS;
 
+#if FEATURE_TASK_DISCOVERY
+    if((st->taskWatchFd < 0 || st->bTaskScanRetry) &&
+       st->taskScanNextNs < best)
+        best = st->taskScanNextNs;
+#endif
+
     for(usize i = 0; i < st->taskCount; i++)
     {
         const Task *t = &st->task[i];
+
+        if(t->bRetiring)
+        {
+            if(t->retireDeadlineNs != 0 && t->retireDeadlineNs < best)
+                best = t->retireDeadlineNs;
+            if(t->probeKillDeadlineNs != 0 && t->probeKillDeadlineNs < best)
+                best = t->probeKillDeadlineNs;
+            continue;
+        }
+        if(!t->bPresent)
+            continue;
+
+        if(t->probeKillDeadlineNs != 0 && t->probeKillDeadlineNs < best)
+            best = t->probeKillDeadlineNs;
 
         if((t->state == TS_BACKOFF || t->state == TS_IDLE) && t->nextRunNs < best)
             best = t->nextRunNs;
@@ -3951,7 +4663,17 @@ bool ProbeReap(InitState *st, i32 pid, i32 status, u64 nowNs)
         if(t->probePid != pid)
             continue;
 
+        if(t->bRetiring)
+        {
+            t->probePid = 0;
+            t->bProbeKilled = false;
+            t->probeKillDeadlineNs = 0;
+            st->bTaskScanPending = true;
+            return true;
+        }
+
         t->probePid = 0;
+        t->probeKillDeadlineNs = 0;
         t->lastProbeNs = nowNs;
         t->nextProbeNs = nowNs + t->probeIntervalNs;
 
@@ -4029,7 +4751,7 @@ static bool WdogCriticalHealthy(const InitState *st, u64 nowNs)
     for(usize i = 0; i < st->taskCount; i++)
     {
         const Task *t = &st->task[i];
-        if(!t->bCritical)
+        if(!t->bPresent || t->bRetiring || !t->bCritical)
             continue;
 
         if(t->state != TS_RUNNING || t->pid <= 0)
@@ -5360,6 +6082,9 @@ static void ReapAll(InitState *st, u64 nowNs)
             continue;
         /* Reap unknown orphans reparented to PID 1 */
     }
+
+    for(usize i = 0; i < st->taskCount; i++)
+        TaskGroupReap(st, &st->task[i], nowNs);
 }
 
 static u64 NextDeadline(InitState *st, u64 nowNs)
@@ -5376,8 +6101,8 @@ static u64 NextDeadline(InitState *st, u64 nowNs)
 
 static void EventLoop(InitState *st, const KSigSet *unblocked)
 {
-    KPollFd fds[CFG_MAX_TASKS * 2 + 1];
-    Task *owner[CFG_MAX_TASKS * 2 + 1];
+    KPollFd fds[CFG_MAX_TASKS * 2 + 2];
+    Task *owner[CFG_MAX_TASKS * 2 + 2];
 
     for(;;)
     {
@@ -5417,6 +6142,12 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
         }
         else
         {
+#if FEATURE_TASK_DISCOVERY
+            if(st->bTaskScanPending ||
+               (nowNs >= st->taskScanNextNs &&
+                (st->taskWatchFd < 0 || st->bTaskScanRetry)))
+                TaskScanAll(st);
+#endif
             TaskTick(st, nowNs);
             SntpTick(st, nowNs);
             LogdSupervise(st, nowNs);
@@ -5449,6 +6180,9 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
         }
 
         usize sntpSlot = (usize)-1;
+#if FEATURE_TASK_DISCOVERY
+        usize taskWatchSlot = (usize)-1;
+#endif
         if(st->sntpFd >= 0)
         {
             sntpSlot = nfds;
@@ -5458,6 +6192,18 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
             fds[nfds].revents = 0;
             nfds++;
         }
+
+#if FEATURE_TASK_DISCOVERY
+        if(st->taskWatchFd >= 0)
+        {
+            taskWatchSlot = nfds;
+            owner[nfds] = NULL;
+            fds[nfds].fd = st->taskWatchFd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+#endif
 
         u64 deadline = NextDeadline(st, nowNs);
         u64 waitNs = deadline > nowNs ? deadline - nowNs : 0;
@@ -5481,6 +6227,13 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
                 SntpHandleReply(st, SysBootNs());
                 continue;
             }
+#if FEATURE_TASK_DISCOVERY
+            if(i == taskWatchSlot)
+            {
+                TaskWatchDrain(st);
+                continue;
+            }
+#endif
             /* Drain POLLHUP so writers cannot block behind unread pipe data */
             TaskDrain(st, owner[i]);
         }
@@ -5495,6 +6248,7 @@ void InitMain(void)
     memset(st, 0, sizeof(*st));
     st->wdogFd = -1;
     st->sntpFd = -1;
+    st->taskWatchFd = -1;
     st->consoleFd = 2;
 
     SysUmask(0022);
@@ -5527,6 +6281,9 @@ void InitMain(void)
 
     WdogOpen(st);
 
+#if FEATURE_TASK_DISCOVERY
+    TaskWatchOpen(st);
+#endif
     TaskScanAll(st);
 
     st->sntpNextNs = SysBootNs();

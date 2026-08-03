@@ -7,6 +7,7 @@ MARKER_CAPTURE="${MARKER_CAPTURE:-1}"
 MARKER_SNTP="${MARKER_SNTP:-1}"
 MARKER_STATUS="${MARKER_STATUS:-0}"
 MARKER_STATUS_FALLBACK="${MARKER_STATUS_FALLBACK:-0}"
+MARKER_DISCOVERY="${MARKER_DISCOVERY:-0}"
 if [ -z "${EXPECT_TASKS:-}" ]; then
     if [ "${INIT_SNTP_FIXTURE:-1}" -ne 0 ]; then
         EXPECT_TASKS=22
@@ -79,6 +80,15 @@ fi
 if [ "$MARKER_STATUS_FALLBACK" -ne 0 ]; then
     expect "mount tmpfs on /run failed"
     expect "status: using anonymous fallback"
+fi
+
+if [ "$MARKER_DISCOVERY" -ne 0 ]; then
+    expect "FIXTURE discovery v1 discovery_replace started"
+    expect "FIXTURE discovery v1 discovery_add started"
+    expect "FIXTURE discovery v2 discovery_replace started"
+    expect "FIXTURE discovery add removed"
+    expect "FIXTURE discovery replacement complete"
+    reject "FIXTURE discovery failed:"
 fi
 
 if [ "$MARKER_LOGD" -ne 0 ]; then

@@ -219,6 +219,8 @@ test-ns:
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_NS_REMOUNT_TEST=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_TASK_DISCOVERY_TEST=1 \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 test-faults:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 all fixtures
