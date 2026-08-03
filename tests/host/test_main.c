@@ -242,22 +242,24 @@ static void TestNames(void)
 
     char *names[CFG_MAX_TASKS];
     char storage[CFG_MAX_TASKS][16];
+    u64 values[CFG_MAX_TASKS];
     usize count = 0;
 
     for(u32 i = 0; i < CFG_MAX_TASKS + 5; i++)
     {
         u32 value = (i * 17u) % (CFG_MAX_TASKS + 5u);
         char candidate[16];
-        Fmt(candidate, sizeof(candidate), "task-%02u", value);
-        NameSetInsert(names, (char *)storage, &count, CFG_MAX_TASKS,
-                      sizeof(storage[0]), candidate);
+        Fmt(candidate, sizeof(candidate), "task-%u", value);
+        NameSetInsertValue(names, values, (char *)storage, &count, CFG_MAX_TASKS,
+                           sizeof(storage[0]), candidate, value);
     }
 
     CHECK(count == CFG_MAX_TASKS);
     for(u32 i = 0; i < CFG_MAX_TASKS; i++)
     {
         char expected[16];
-        Fmt(expected, sizeof(expected), "task-%02u", i);
+        Fmt(expected, sizeof(expected), "task-%u", (u32)values[i]);
+        CHECK(i == 0 || StrCmp(names[i - 1], names[i]) < 0);
         CHECK(StrEq(names[i], expected));
     }
 

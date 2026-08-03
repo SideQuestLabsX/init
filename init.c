@@ -808,6 +808,9 @@ u64   Hash64(const void *data, usize n);
 
 bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
                    usize nameCap, const char *name);
+bool NameSetInsertValue(char **names, u64 *values, char *storage, usize *count,
+                        usize maxEntries, usize nameCap, const char *name,
+                        u64 value);
 u8 LogPolicyResolve(u8 policy, u8 defaultPolicy);
 
 #ifndef INIT_HOSTED
@@ -1409,8 +1412,9 @@ u64 Hash64(const void *data, usize n)
     return h;
 }
 
-bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
-                   usize nameCap, const char *name)
+bool NameSetInsertValue(char **names, u64 *values, char *storage, usize *count,
+                        usize maxEntries, usize nameCap, const char *name,
+                        u64 value)
 {
     if(maxEntries == 0 || nameCap == 0 || StrLen(name) >= nameCap)
         return false;
@@ -1443,9 +1447,22 @@ bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
 
     StrCopy(slot, nameCap, name);
     for(usize i = *count - 1; i > lo; i--)
+    {
         names[i] = names[i - 1];
+        if(values != NULL)
+            values[i] = values[i - 1];
+    }
     names[lo] = slot;
+    if(values != NULL)
+        values[lo] = value;
     return true;
+}
+
+bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
+                   usize nameCap, const char *name)
+{
+    return NameSetInsertValue(names, NULL, storage, count, maxEntries, nameCap,
+                              name, 0);
 }
 
 /* boot arena */
@@ -2677,6 +2694,8 @@ typedef struct
 {
     char path[CFG_PATH_MAX];
     u16  nameOffset;
+    u64  executableIno;
+    bool bExecutableInoValid;
     bool bHasCheck;
 
     u32  schedule;
@@ -2865,6 +2884,7 @@ i32  SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t);
 typedef struct
 {
     char **name;
+    u64   *ino;
     usize  count;
 } DirList;
 
@@ -2876,6 +2896,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
 bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 wantType)
 {
     out->name = NULL;
+    out->ino = NULL;
     out->count = 0;
 
     isize fd = SysOpen(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
@@ -2884,7 +2905,8 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
 
     char **names = (char **)ArenaAlloc(a, maxEntries * sizeof(char *), sizeof(char *));
     char *storage = (char *)ArenaAlloc(a, maxEntries * CFG_PATH_MAX, 1);
-    if(names == NULL || storage == NULL)
+    u64 *inos = (u64 *)ArenaAlloc(a, maxEntries * sizeof(u64), sizeof(u64));
+    if(names == NULL || storage == NULL || inos == NULL)
     {
         SysClose((i32)fd);
         return false;
@@ -2949,7 +2971,8 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
 
             if(count == maxEntries)
                 dropped++;
-            NameSetInsert(names, storage, &count, maxEntries, CFG_PATH_MAX, d->name);
+            NameSetInsertValue(names, inos, storage, &count, maxEntries,
+                               CFG_PATH_MAX, d->name, d->ino);
         }
     }
 
@@ -2961,6 +2984,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
         return false;
     }
     out->name = names;
+    out->ino = inos;
     out->count = count;
     return true;
 }
@@ -3507,7 +3531,7 @@ static bool TaskParseSchedule(const char *name, u32 *schedule, u64 *intervalNs,
 
 static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
                           const char *name, u32 schedule, u64 intervalNs,
-                          CalSpec cal, u64 nowNs)
+                          CalSpec cal, u64 executableIno, u64 nowNs)
 {
     memset(t, 0, sizeof(*t));
     if(StrEndsWith(name, ".check"))
@@ -3523,6 +3547,8 @@ static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
         return false;
     }
     t->nameOffset = (u16)(StrLen(t->path) - StrLen(name));
+    t->executableIno = executableIno;
+    t->bExecutableInoValid = executableIno != 0;
 
     if(SysAccess(t->path, X_OK) < 0)
     {
@@ -3594,7 +3620,9 @@ static bool TaskSpecEqual(const Task *a, const Task *b)
            a->probeTimeoutNs == b->probeTimeoutNs &&
            a->graceNs == b->graceNs &&
            a->outPolicy == b->outPolicy &&
-           a->errPolicy == b->errPolicy;
+           a->errPolicy == b->errPolicy &&
+           (!a->bExecutableInoValid || !b->bExecutableInoValid ||
+            a->executableIno == b->executableIno);
 }
 
 static void TaskInstallSpec(Task *dst, const Task *spec)
@@ -3635,6 +3663,12 @@ static bool TaskReconcileCandidate(InitState *st, const Task *spec, u64 nowNs)
     t->bPresent = true;
     bool bChanged = !bWasPresent || t->bChanged || !TaskSpecEqual(t, spec);
     t->bChanged = false;
+
+    if(!bChanged && !t->bExecutableInoValid && spec->bExecutableInoValid)
+    {
+        t->executableIno = spec->executableIno;
+        t->bExecutableInoValid = true;
+    }
 
     if(t->bRetiring)
     {
@@ -3965,7 +3999,7 @@ void TaskScanAll(InitState *st)
         {
             Task spec;
             if(!TaskBuildSpec(st, &spec, dirPath, files.name[f], schedule,
-                              intervalNs, cal, nowNs))
+                              intervalNs, cal, files.ino[f], nowNs))
                 continue;
             if(TaskReconcileCandidate(st, &spec, nowNs))
                 bRetry = true;
