@@ -37,6 +37,15 @@ timeout 4 unshare --user --map-root-user --mount --pid --fork \
     chroot "$STAGE" /init > "$NULL_LOG" 2>&1
 rc=$?
 set -e
+case "$rc" in
+    124|129)
+        ;;
+    *)
+        cat "$NULL_LOG"
+        echo "FAIL: null-device test exited with status $rc"
+        exit 1
+        ;;
+esac
 if ! grep -qF 'init: child open /dev/null failed, errno 2' "$NULL_LOG"; then
     cat "$NULL_LOG"
     echo "FAIL: missing null-device child failure"
@@ -59,6 +68,20 @@ timeout 4 strace -f -qq -e trace=clock_gettime \
     chroot "$STAGE" /init > "$CLOCK_LOG" 2>&1
 rc=$?
 set -e
+case "$rc" in
+    124|129)
+        ;;
+    *)
+        cat "$CLOCK_LOG"
+        echo "FAIL: clock failure test exited with status $rc"
+        exit 1
+        ;;
+esac
+if ! grep -qF '= -1 EPERM' "$CLOCK_TRACE"; then
+    cat "$CLOCK_TRACE"
+    echo "FAIL: clock_gettime failure was not injected"
+    exit 1
+fi
 if ! grep -qF 'init: PANIC: clock_gettime failed' "$CLOCK_LOG"; then
     cat "$CLOCK_LOG"
     echo "FAIL: missing clock failure panic"

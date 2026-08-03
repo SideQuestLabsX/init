@@ -125,6 +125,9 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
         run: make test-ns ARCH=x86_64 CC=gcc-14 INIT_NS_TIER=${{ matrix.tier }}
+      - name: run fault injection
+        if: matrix.tier == 'caps'
+        run: make test-faults ARCH=x86_64 CC=gcc-14
 
   boot-qemu:
     name: qemu boot test (x86_64)

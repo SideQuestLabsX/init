@@ -219,15 +219,17 @@ test-ns:
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_NS_REMOUNT_TEST=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
-	@if [ "$(INIT_NS_TIER)" != auto ]; then \
-		$(MAKE) --no-print-directory ARCH=$(ARCH) NS_BUILD=$(NS_BUILD) test-faults; \
-	fi
 
 test-faults:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 all fixtures
 	ARCH=$(ARCH) sh tools/run-fault-tests.sh "$(NS_BUILD)"
 
-check: test abi-check all test-ns test-qemu
+check:
+	$(MAKE) --no-print-directory test
+	$(MAKE) --no-print-directory ARCH=$(ARCH) abi-check all
+	$(MAKE) --no-print-directory ARCH=$(ARCH) test-ns
+	$(MAKE) --no-print-directory ARCH=$(ARCH) test-faults
+	$(MAKE) --no-print-directory ARCH=$(ARCH) test-qemu
 
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \

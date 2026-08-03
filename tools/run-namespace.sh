@@ -268,10 +268,19 @@ if [ "$log_symlink" -ne 0 ]; then
     fi
 fi
 
-if [ $RC -eq 124 ]; then
-    echo "  BAD   timed out after ${TIMEOUT}s without shutting down"
-    fail=1
-fi
+# PID 1 teardown can deliver SIGHUP to the namespace shell
+case "$RC" in
+    0|129)
+        ;;
+    124)
+        echo "  BAD   timed out after ${TIMEOUT}s without shutting down"
+        fail=1
+        ;;
+    *)
+        echo "  BAD   namespace exited with status $RC"
+        fail=1
+        ;;
+esac
 
 if [ $fail -ne 0 ]; then
     record_result fail
