@@ -235,7 +235,8 @@ check:
 
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
-                    FEATURE_CAPABILITY_DROP=0
+                    FEATURE_CAPABILITY_DROP=0 FEATURE_TASK_DISCOVERY=0 \
+                    FEATURE_PERSIST_SCHEDULE=1
 
 CC_x86_64      ?= gcc
 CC_x86         ?= gcc
@@ -275,6 +276,9 @@ test-variant:
 	k=$${v%%=*}; \
 	extra="-U$$k -D$$v"; \
 	fixture_extra=; \
+	if [ "$$v" = FEATURE_PERSIST_SCHEDULE=1 ]; then \
+		extra="$$extra -DFIXTURE_CLOCK_SET_SUCCESS=1"; \
+	fi; \
 	if [ "$$v" = FEATURE_EXEC_PROBES=0 ]; then \
 		fixture_extra="-UFEATURE_EXEC_PROBES -DFEATURE_EXEC_PROBES=0"; \
 	fi; \

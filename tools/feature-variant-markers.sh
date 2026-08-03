@@ -18,6 +18,12 @@ case "$FEATURE_VARIANT" in
     FEATURE_CAPABILITY_DROP=0)
         MARKER_NS_TIER=
         ;;
+    FEATURE_TASK_DISCOVERY=0)
+        MARKER_DISCOVERY=0
+        ;;
+    FEATURE_PERSIST_SCHEDULE=1)
+        MARKER_SNTP_CLOCK_SET=1
+        ;;
 esac
 
 . tools/boot-markers.sh
@@ -35,5 +41,8 @@ case "$FEATURE_VARIANT" in
     FEATURE_LOG_DISK=0)
         expect "FIXTURE logfile missing"
         reject "log writer pid"
+        ;;
+    FEATURE_TASK_DISCOVERY=0)
+        reject "FIXTURE discovery"
         ;;
 esac

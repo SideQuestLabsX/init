@@ -227,6 +227,12 @@ if [ "$remount_test" -ne 0 ]; then
             sub(/".*$/, "", path)
             depth = gsub(/\//, "/", path)
             testCount++
+            if(index($0, ") = 0"))
+                bSuccess++
+            else if(index($0, ") = -1 EPERM"))
+                bPermission++
+            else
+                bBadResult = 1
             if(bSeen && depth > previousDepth)
                 bBadOrder = 1
             previousDepth = depth
@@ -253,7 +259,8 @@ if [ "$remount_test" -ne 0 ]; then
             }
             exit !(testCount == 52 && deepestCount == 1 && decodedCount == 1 &&
                    earlyLine > 0 && shallowLine > 0 && earlyLine < shallowLine &&
-                   !bBadOrder && !bBadChain)
+                   !bBadOrder && !bBadChain && !bBadResult &&
+                   (bSuccess == testCount || bPermission == testCount))
         }
     ' "$MOUNT_TRACE"; then
         echo "  ok    complete deepest-first remount attempts"

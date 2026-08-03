@@ -8,6 +8,45 @@ MARKER_SNTP="${MARKER_SNTP:-1}"
 MARKER_STATUS="${MARKER_STATUS:-0}"
 MARKER_STATUS_FALLBACK="${MARKER_STATUS_FALLBACK:-0}"
 MARKER_DISCOVERY="${MARKER_DISCOVERY:-0}"
+
+expect_once()
+{
+    count=$(awk -v needle="$1" 'index($0, needle) { count++ } END { print count + 0 }' "$LOG")
+    if [ "$count" -eq 1 ]; then
+        echo "  ok    $1 appears once"
+    else
+        echo "  BAD   $1 appears $count times"
+        fail=1
+    fi
+}
+
+expect_once_live()
+{
+    count=$(awk -v needle="$1" '
+        index($0, "FIXTURE logfile begin") { exit }
+        index($0, needle) { count++ }
+        END { print count + 0 }
+    ' "$LOG")
+    if [ "$count" -eq 1 ]; then
+        echo "  ok    $1 appears once"
+    else
+        echo "  BAD   $1 appears $count times"
+        fail=1
+    fi
+}
+
+expect_order()
+{
+    first=$(awk -v needle="$1" 'index($0, needle) { print NR; exit }' "$LOG")
+    second=$(awk -v needle="$2" 'index($0, needle) { print NR; exit }' "$LOG")
+    if [ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ]; then
+        echo "  ok    $1 precedes $2"
+    else
+        echo "  BAD   $1 does not precede $2"
+        fail=1
+    fi
+}
+
 if [ -z "${EXPECT_TASKS:-}" ]; then
     if [ "${INIT_SNTP_FIXTURE:-1}" -ne 0 ]; then
         EXPECT_TASKS=22
@@ -16,8 +55,12 @@ if [ -z "${EXPECT_TASKS:-}" ]; then
     fi
 fi
 
-expect "init ${MARKER_ARCH:-$ARCH} starting, pid 1"
-expect "$EXPECT_TASKS tasks in /tasks"
+expect_once_live "init ${MARKER_ARCH:-$ARCH} starting, pid 1"
+if [ "$MARKER_DISCOVERY" -ne 0 ]; then
+    expect "$EXPECT_TASKS tasks in /tasks"
+else
+    expect_once_live "$EXPECT_TASKS tasks in /tasks"
+fi
 expect "ok: started pid"
 expect "FIXTURE ok started"
 expect "FIXTURE log edge line sent"
@@ -30,14 +73,23 @@ expect "flap: exit 3 sig 0, respawn in"
 expect "flap: FAILED after"
 expect "FIXTURE tick fired"
 expect "FIXTURE selftest done"
-expect "shutdown requested by signal ${MARKER_SHUTDOWN_SIGNAL:-10}"
-expect "syncing"
+expect_once "shutdown requested by signal ${MARKER_SHUTDOWN_SIGNAL:-10}"
+expect_once "syncing"
+expect_order "shutdown requested by signal ${MARKER_SHUTDOWN_SIGNAL:-10}" "syncing"
 reject "PANIC"
 reject "Kernel panic"
+reject "FIXTURE log writer fixture incomplete"
+reject "FIXTURE interleaved log invalid"
+reject "FIXTURE console completion incomplete"
+reject "FIXTURE watchdog completion incomplete"
 
 if [ "$MARKER_SNTP" -ne 0 ] && [ "${MARKER_NAMESPACE:-0}" -ne 0 ]; then
     expect "FIXTURE sntp reply sent"
-    expect "sntp: clock_settime rejected"
+    if [ "${MARKER_SNTP_CLOCK_SET:-0}" -ne 0 ]; then
+        expect "sntp: clock set to"
+    else
+        expect "sntp: clock_settime rejected"
+    fi
 fi
 
 if [ "$MARKER_STATUS" -ne 0 ]; then
@@ -88,6 +140,14 @@ if [ "$MARKER_DISCOVERY" -ne 0 ]; then
     expect "FIXTURE discovery v2 discovery_replace started"
     expect "FIXTURE discovery add removed"
     expect "FIXTURE discovery replacement complete"
+    expect_order "FIXTURE discovery v1 discovery_replace started" \
+                 "FIXTURE discovery v1 discovery_add started"
+    expect_order "FIXTURE discovery v1 discovery_add started" \
+                 "FIXTURE discovery v2 discovery_replace started"
+    expect_order "FIXTURE discovery v2 discovery_replace started" \
+                 "FIXTURE discovery add removed"
+    expect_order "FIXTURE discovery add removed" \
+                 "FIXTURE discovery replacement complete"
     reject "FIXTURE discovery failed:"
 fi
 

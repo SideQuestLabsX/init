@@ -107,8 +107,8 @@ make check-all
 | `make abi-check ARCH=...` | Hand-transcribed syscall and ABI constants against UAPI headers | Target kernel headers |
 
 Runtime harnesses report a skip when namespace, QEMU or kernel prerequisites are
-missing. Compiler and header failures are errors. `make check-all` also runs
-feature variants, then builds and ABI-checks installed cross-toolchains.
+missing. Compiler and header failures are errors. `make check-all` also builds
+and ABI-checks installed cross-toolchains, then runs feature variants.
 
 On Windows, `tools/test.ps1` runs host tests, an x86_64 build and namespace tests
 through WSL. Without WSL, it runs native host tests.

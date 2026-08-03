@@ -2465,10 +2465,16 @@ static inline isize SysClockGetTime(i32 clk, KTimeSpec *ts)
 
 static inline isize SysClockSetTime(i32 clk, const KTimeSpec *ts)
 {
+#ifdef FIXTURE_CLOCK_SET_SUCCESS
+    UNUSED(clk);
+    UNUSED(ts);
+    return 0;
+#else
 #ifdef INIT_TIME32_ABI
     return SysCall2(SYS_clock_settime64, clk, (isize)ts);
 #else
     return SysCall2(SYS_clock_settime, clk, (isize)ts);
+#endif
 #endif
 }
 

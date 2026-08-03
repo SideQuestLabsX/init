@@ -130,6 +130,7 @@ set -- "$@" \
 QEMU_PID=$!
 QEMU_RC=0
 QEMU_COMPLETE=0
+QEMU_TIMED_OUT=0
 QEMU_ELAPSED=0
 while kill -0 "$QEMU_PID" 2>/dev/null; do
     if [ "$WATCHDOG_TEST" -ne 0 ]; then
@@ -139,14 +140,9 @@ while kill -0 "$QEMU_PID" 2>/dev/null; do
             kill "$QEMU_PID" 2>/dev/null
             break
         fi
-    else
-        if grep -qF "init: syncing" "$LOG" 2>/dev/null; then
-            QEMU_COMPLETE=1
-            kill "$QEMU_PID" 2>/dev/null
-            break
-        fi
     fi
     if [ "$QEMU_ELAPSED" -ge "$TIMEOUT" ]; then
+        QEMU_TIMED_OUT=1
         kill "$QEMU_PID" 2>/dev/null
         break
     fi
@@ -157,6 +153,8 @@ wait "$QEMU_PID"
 QEMU_CHILD_RC=$?
 if [ "$QEMU_COMPLETE" -ne 0 ]; then
     QEMU_RC=0
+elif [ "$QEMU_TIMED_OUT" -ne 0 ]; then
+    QEMU_RC=124
 else
     QEMU_RC=$QEMU_CHILD_RC
 fi
