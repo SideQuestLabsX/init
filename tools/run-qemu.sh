@@ -140,6 +140,12 @@ while kill -0 "$QEMU_PID" 2>/dev/null; do
             kill "$QEMU_PID" 2>/dev/null
             break
         fi
+    else
+        if grep -qF "reboot: Restarting system" "$LOG" 2>/dev/null; then
+            QEMU_COMPLETE=1
+            kill "$QEMU_PID" 2>/dev/null
+            break
+        fi
     fi
     if [ "$QEMU_ELAPSED" -ge "$TIMEOUT" ]; then
         QEMU_TIMED_OUT=1

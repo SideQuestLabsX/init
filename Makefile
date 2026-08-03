@@ -274,13 +274,11 @@ test-variant:
 	@set -eu; \
 	v='$(FEATURE_VARIANT)'; \
 	k=$${v%%=*}; \
-	extra="-U$$k -D$$v"; \
-	fixture_extra=; \
+	feature_extra="-U$$k -D$$v"; \
+	extra="$$feature_extra"; \
+	fixture_extra="$$feature_extra"; \
 	if [ "$$v" = FEATURE_PERSIST_SCHEDULE=1 ]; then \
 		extra="$$extra -DFIXTURE_CLOCK_SET_SUCCESS=1"; \
-	fi; \
-	if [ "$$v" = FEATURE_EXEC_PROBES=0 ]; then \
-		fixture_extra="-UFEATURE_EXEC_PROBES -DFEATURE_EXEC_PROBES=0"; \
 	fi; \
 	if [ "$$v" = FEATURE_LOG_CAPTURE=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1"; \

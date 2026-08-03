@@ -165,7 +165,7 @@ void FixtureMain(void)
 #endif
 
 #ifndef FIXTURE_CAPTURE_DISABLED
-    if(!WaitForLogMarkers(false, FIXTURE_WAIT_ATTEMPTS))
+    if(!WaitForLogMarkers(true, FIXTURE_WAIT_ATTEMPTS))
     {
         FixtureSay("FIXTURE initial log markers missing");
         SysExit(1);

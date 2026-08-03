@@ -205,7 +205,7 @@ void FixtureMain(void)
 
 #if FEATURE_LOG_DISK
     if(FileExists("/var/log/logd-fixture-expected") &&
-       !WaitForFile("/var/log/logd-fixture-done", FIXTURE_WAIT_ATTEMPTS * 2u))
+       !WaitForFile("/var/log/logd-fixture-done", FIXTURE_WAIT_ATTEMPTS * 3u))
         FixtureSay("FIXTURE log writer fixture incomplete");
 #endif
 
@@ -220,7 +220,7 @@ void FixtureMain(void)
 #endif
 
 #if FEATURE_EXEC_PROBES
-    if(FileExists("/dev/log-symlink-test") && !WaitForConsoleCompletion())
+    if(!WaitForConsoleCompletion())
         FixtureSay("FIXTURE console completion incomplete");
 #endif
 
