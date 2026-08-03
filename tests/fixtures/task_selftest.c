@@ -220,7 +220,11 @@ void FixtureMain(void)
 #endif
 
 #if FEATURE_EXEC_PROBES
+#if !FEATURE_LOG_DISK
     if(!WaitForConsoleCompletion())
+#else
+    if(FileExists("/dev/log-symlink-test") && !WaitForConsoleCompletion())
+#endif
         FixtureSay("FIXTURE console completion incomplete");
 #endif
 

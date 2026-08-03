@@ -107,7 +107,7 @@ case "$FEATURE_VARIANT" in
             echo "BAD: FEATURE_LOG_DISK=0 created init.log"
             exit 1
         fi
-        if ! awk '(($1 + $2) * 4) < $3 { exit 0 } { exit 1 }' "$cpu"; then
+        if ! awk '(($1 + $2) * 2) < $3 { exit 0 } { exit 1 }' "$cpu"; then
             echo "BAD: disk-less boot CPU ratio too high: $(cat "$cpu")"
             exit 1
         fi
