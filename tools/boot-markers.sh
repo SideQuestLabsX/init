@@ -134,6 +134,10 @@ if [ "$MARKER_STATUS_FALLBACK" -ne 0 ]; then
     expect "status: using anonymous fallback"
 fi
 
+if [ "$MARKER_STATUS" -ne 0 ] && [ "$MARKER_DISCOVERY" -ne 0 ]; then
+    expect "FIXTURE discovery tombstones verified"
+fi
+
 if [ "$MARKER_DISCOVERY" -ne 0 ]; then
     expect "discovery_content: done"
     expect "FIXTURE discovery v2 discovery_content started"
@@ -141,6 +145,7 @@ if [ "$MARKER_DISCOVERY" -ne 0 ]; then
     expect "FIXTURE discovery v1 discovery_replace started"
     expect "FIXTURE discovery v1 discovery_add started"
     expect "FIXTURE discovery v2 discovery_replace started"
+    expect "FIXTURE discovery v1 discovery_new started"
     expect "FIXTURE discovery add removed"
     expect "FIXTURE discovery replacement complete"
     expect_order "discovery_content: done" \
@@ -153,6 +158,16 @@ if [ "$MARKER_DISCOVERY" -ne 0 ]; then
                  "FIXTURE discovery v2 discovery_replace started"
     expect_order "FIXTURE discovery v2 discovery_replace started" \
                  "FIXTURE discovery add removed"
+    expect_order "FIXTURE discovery add removed" \
+                 "FIXTURE discovery v1 discovery_new started"
+    if [ "$MARKER_STATUS" -ne 0 ]; then
+        expect_order "FIXTURE discovery v1 discovery_new started" \
+                     "FIXTURE discovery tombstones verified"
+        expect_order "FIXTURE discovery tombstones verified" \
+                     "FIXTURE discovery replacement complete"
+    fi
+    expect_order "FIXTURE discovery v1 discovery_new started" \
+                 "FIXTURE discovery replacement complete"
     expect_order "FIXTURE discovery add removed" \
                  "FIXTURE discovery replacement complete"
     reject "FIXTURE discovery failed:"

@@ -1,3 +1,4 @@
+#define INIT_STATUS_READER 1
 #include "fixture.h"
 
 static bool ConsoleContains(const char *needle)
@@ -36,6 +37,56 @@ static bool WaitForConsole(const char *needle)
     for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS; i++)
     {
         if(ConsoleContains(needle))
+            return true;
+        FixtureSleep(100ull * NS_PER_MS);
+    }
+    return false;
+}
+
+static bool StatusHasTombstones(void)
+{
+    isize fd = SysOpen(STATUS_PATH, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    if(fd < 0 || SysLseek((i32)fd, 0, SEEK_END) != (isize)sizeof(StatusBlock))
+    {
+        if(fd >= 0)
+            SysClose((i32)fd);
+        return false;
+    }
+
+    void *mapped = SysMmap(NULL, sizeof(StatusBlock), PROT_READ, MAP_SHARED,
+                           (i32)fd, 0);
+    SysClose((i32)fd);
+    isize mappedValue = (isize)(uintptr_t)mapped;
+    if(mappedValue < 0 && mappedValue > -4096)
+        return false;
+
+    StatusSnapshot snapshot;
+    StatusSeq sequence;
+    bool bRead = StatusRead((const StatusBlock *)mapped, &snapshot, &sequence);
+    bool bRemoved = false;
+    bool bNew = false;
+    if(bRead && snapshot.magic == STATUS_MAGIC &&
+       snapshot.version == STATUS_VERSION && snapshot.count <= CFG_MAX_TASKS)
+    {
+        for(u32 i = 0; i < snapshot.count; i++)
+        {
+            const StatusEntry *entry = &snapshot.task[i];
+            if(StrEq(entry->name, "discovery_add") && entry->state == TS_REMOVED)
+                bRemoved = true;
+            if(StrEq(entry->name, "discovery_new"))
+                bNew = true;
+        }
+    }
+
+    SysMunmap(mapped, sizeof(StatusBlock));
+    return bRemoved && bNew;
+}
+
+static bool WaitForStatusTombstones(void)
+{
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS; i++)
+    {
+        if(StatusHasTombstones())
             return true;
         FixtureSleep(100ull * NS_PER_MS);
     }
@@ -187,6 +238,14 @@ void FixtureMain(void)
         DiscoveryFail("deleted task survived");
 
     FixtureSay("FIXTURE discovery add removed");
+    if(SysRename("/tasks/always/.discovery_new",
+                 "/tasks/always/discovery_new") < 0)
+        DiscoveryFail("tombstone task rename failed");
+    if(!WaitForConsole("FIXTURE discovery v1 discovery_new started"))
+        DiscoveryFail("tombstone slot task did not start");
+    if(!WaitForStatusTombstones())
+        DiscoveryFail("tombstone status snapshot missing");
+    FixtureSay("FIXTURE discovery tombstones verified");
     FixtureSay("FIXTURE discovery replacement complete");
     SysExit(0);
 }

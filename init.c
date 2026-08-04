@@ -2784,6 +2784,7 @@ typedef struct
 
     u32  state;
     bool bPresent;
+    bool bStatusTombstone;
     bool bSeen;
     bool bChanged;
     bool bRetiring;
@@ -3747,7 +3748,8 @@ static bool TaskReconcileCandidate(InitState *st, const Task *spec, u64 nowNs)
     {
         for(usize i = 0; i < st->taskCount; i++)
         {
-            if(!st->task[i].bPresent && TaskCanReuse(&st->task[i]))
+            if(!st->task[i].bPresent && !st->task[i].bStatusTombstone &&
+               TaskCanReuse(&st->task[i]))
             {
                 t = &st->task[i];
                 break;
@@ -4139,6 +4141,7 @@ void TaskScanAll(InitState *st)
                 continue;
 
             t->bPresent = false;
+            t->bStatusTombstone = true;
             t->bChanged = false;
             t->bReplacementPending = false;
             if(TaskCanReuse(t))

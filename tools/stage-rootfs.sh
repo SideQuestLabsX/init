@@ -70,6 +70,7 @@ if [ "${INIT_TASK_DISCOVERY_TEST:-0}" -ne 0 ]; then
     install_bin task_discovery_v2 tasks/boot/.discovery_content_v2
     install_bin task_discovery_v1 tasks/always/discovery_replace
     install_bin task_discovery_v1 tasks/always/.discovery_add
+    install_bin task_discovery_v1 tasks/always/.discovery_new
     install_bin task_discovery_v2 tasks/always/.discovery_replace_v2
 fi
 
