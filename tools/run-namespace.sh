@@ -123,7 +123,7 @@ INIT_STATUS_FALLBACK=$status_fallback \
 INIT_TASK_DISCOVERY_TEST=$discovery_test \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + 2 * discovery_test))
+task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + 3 * discovery_test))
 EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier

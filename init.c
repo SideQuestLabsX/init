@@ -90,6 +90,7 @@ typedef unsigned long usize;
   #define SYS_inotify_add_watch 254
   #define SYS_inotify_rm_watch 255
   #define SYS_getrandom       318
+  #define SYS_statx           332
 
   #define INIT_ARCH_NAME      "x86_64"
   #define INIT_HAS_SA_RESTORER 1
@@ -150,6 +151,7 @@ typedef unsigned long usize;
   #define SYS_inotify_add_watch 292
   #define SYS_inotify_rm_watch 293
   #define SYS_getrandom       355
+  #define SYS_statx           383
 
   #define INIT_ARCH_NAME      "x86"
   #define INIT_HAS_SA_RESTORER 1
@@ -222,6 +224,7 @@ typedef unsigned long usize;
   #define SYS_inotify_add_watch 27
   #define SYS_inotify_rm_watch 28
   #define SYS_getrandom       278
+  #define SYS_statx           291
 
   #if defined(__aarch64__)
     #define INIT_ARCH_NAME    "aarch64"
@@ -290,6 +293,7 @@ typedef unsigned long usize;
   #define SYS_inotify_add_watch 317
   #define SYS_inotify_rm_watch 318
   #define SYS_getrandom       384
+  #define SYS_statx           397
 
   #define INIT_ARCH_NAME      "arm"
   #define INIT_HAS_SA_RESTORER 1
@@ -354,6 +358,7 @@ typedef unsigned long usize;
   #define SYS_inotify_add_watch 4285
   #define SYS_inotify_rm_watch 4286
   #define SYS_getrandom       4353
+  #define SYS_statx           4366
 
   #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     #define INIT_ARCH_NAME    "mips"
@@ -444,6 +449,12 @@ typedef unsigned long usize;
 #define AT_FDCWD          (-100)
 #define AT_REMOVEDIR      0x200
 #define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_STATX_SYNC_AS_STAT 0
+
+#define STATX_MTIME        0x00000040u
+#define STATX_CTIME        0x00000080u
+#define STATX_SIZE         0x00000200u
+#define STATX_BASIC_STATS  0x000007ffu
 
 #define F_GETFL 3
 #define F_SETFL 4
@@ -658,6 +669,41 @@ typedef struct
 
 typedef struct
 {
+    i64 sec;
+    u32 nsec;
+    i32 reserved;
+} KStatxTimestamp;
+
+typedef struct
+{
+    u32 mask;
+    u32 blksize;
+    u64 attributes;
+    u32 nlink;
+    u32 uid;
+    u32 gid;
+    u16 mode;
+    u16 spare0;
+    u64 ino;
+    u64 size;
+    u64 blocks;
+    u64 attributesMask;
+    KStatxTimestamp atime;
+    KStatxTimestamp btime;
+    KStatxTimestamp ctime;
+    KStatxTimestamp mtime;
+    u32 rdevMajor;
+    u32 rdevMinor;
+    u32 devMajor;
+    u32 devMinor;
+    u64 mountId;
+    u32 dioMemAlign;
+    u32 dioOffsetAlign;
+    u64 spare3[12];
+} KStatx;
+
+typedef struct
+{
     i32 wd;
     u32 mask;
     u32 cookie;
@@ -666,6 +712,8 @@ typedef struct
 } KInotifyEvent;
 
 _Static_assert(sizeof(KInotifyEvent) == 16, "inotify event ABI changed");
+_Static_assert(sizeof(KStatxTimestamp) == 16, "statx timestamp ABI changed");
+_Static_assert(sizeof(KStatx) == 256, "statx ABI changed");
 
 /* inotify event masks */
 #define IN_ACCESS       0x00000001u
@@ -2365,6 +2413,12 @@ static inline isize SysRename(const char *from, const char *to)
 static inline isize SysAccess(const char *path, i32 mode)
 { return SysCall3(SYS_faccessat, AT_FDCWD, (isize)path, mode); }
 
+static inline isize SysStatx(const char *path, u32 mask, KStatx *out)
+{
+    return SysCall5(SYS_statx, AT_FDCWD, (isize)path, AT_STATX_SYNC_AS_STAT,
+                    mask, (isize)out);
+}
+
 static inline isize SysGetdents64(i32 fd, void *buf, usize n)
 { return SysCall3(SYS_getdents64, fd, (isize)buf, (isize)n); }
 
@@ -2692,10 +2746,21 @@ typedef struct
 
 typedef struct
 {
+    u64 size;
+    i64 mtimeSec;
+    u32 mtimeNsec;
+    i64 ctimeSec;
+    u32 ctimeNsec;
+    bool bValid;
+} TaskFileMetadata;
+
+typedef struct
+{
     char path[CFG_PATH_MAX];
     u16  nameOffset;
     u64  executableIno;
     bool bExecutableInoValid;
+    TaskFileMetadata executableMetadata;
     bool bHasCheck;
 
     u32  schedule;
@@ -2847,6 +2912,7 @@ static void TaskWatchDrain(InitState *st);
 #endif
 static void TaskRetire(InitState *st, Task *t, bool bReplacement, u64 nowNs);
 static bool TaskCanReuse(const Task *t);
+static bool TaskReadMetadata(const char *path, TaskFileMetadata *out);
 
 static void ScheduleStateLoad(InitState *st);
 #if !OFFLINE_MODE
@@ -3529,6 +3595,25 @@ static bool TaskParseSchedule(const char *name, u32 *schedule, u64 *intervalNs,
     return false;
 }
 
+static bool TaskReadMetadata(const char *path, TaskFileMetadata *out)
+{
+    KStatx statx;
+    memset(&statx, 0, sizeof(statx));
+    if(SysStatx(path, STATX_SIZE | STATX_MTIME | STATX_CTIME, &statx) < 0)
+        return false;
+    u32 required = STATX_SIZE | STATX_MTIME | STATX_CTIME;
+    if((statx.mask & required) != required)
+        return false;
+
+    out->size = statx.size;
+    out->mtimeSec = statx.mtime.sec;
+    out->mtimeNsec = statx.mtime.nsec;
+    out->ctimeSec = statx.ctime.sec;
+    out->ctimeNsec = statx.ctime.nsec;
+    out->bValid = true;
+    return true;
+}
+
 static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
                           const char *name, u32 schedule, u64 intervalNs,
                           CalSpec cal, u64 executableIno, u64 nowNs)
@@ -3555,6 +3640,7 @@ static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
         LogF("%s: not executable, skipped", TaskName(t));
         return false;
     }
+    TaskReadMetadata(t->path, &t->executableMetadata);
 
 #if FEATURE_EXEC_PROBES
     char checkPath[CFG_PATH_MAX];
@@ -3602,6 +3688,17 @@ static usize TaskPresentCount(const InitState *st)
     return count;
 }
 
+static bool TaskFileMetadataEqual(const TaskFileMetadata *a,
+                                  const TaskFileMetadata *b)
+{
+    return !a->bValid || !b->bValid ||
+           (a->size == b->size &&
+            a->mtimeSec == b->mtimeSec &&
+            a->mtimeNsec == b->mtimeNsec &&
+            a->ctimeSec == b->ctimeSec &&
+            a->ctimeNsec == b->ctimeNsec);
+}
+
 static bool TaskSpecEqual(const Task *a, const Task *b)
 {
     return a->schedule == b->schedule &&
@@ -3622,7 +3719,9 @@ static bool TaskSpecEqual(const Task *a, const Task *b)
            a->outPolicy == b->outPolicy &&
            a->errPolicy == b->errPolicy &&
            (!a->bExecutableInoValid || !b->bExecutableInoValid ||
-            a->executableIno == b->executableIno);
+            a->executableIno == b->executableIno) &&
+           TaskFileMetadataEqual(&a->executableMetadata,
+                                 &b->executableMetadata);
 }
 
 static void TaskInstallSpec(Task *dst, const Task *spec)
@@ -3668,6 +3767,11 @@ static bool TaskReconcileCandidate(InitState *st, const Task *spec, u64 nowNs)
     {
         t->executableIno = spec->executableIno;
         t->bExecutableInoValid = true;
+    }
+    if(!bChanged && !t->executableMetadata.bValid &&
+       spec->executableMetadata.bValid)
+    {
+        t->executableMetadata = spec->executableMetadata;
     }
 
     if(t->bRetiring)

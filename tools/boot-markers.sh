@@ -135,11 +135,17 @@ if [ "$MARKER_STATUS_FALLBACK" -ne 0 ]; then
 fi
 
 if [ "$MARKER_DISCOVERY" -ne 0 ]; then
+    expect "discovery_content: done"
+    expect "FIXTURE discovery v2 discovery_content started"
     expect "FIXTURE discovery v1 discovery_replace started"
     expect "FIXTURE discovery v1 discovery_add started"
     expect "FIXTURE discovery v2 discovery_replace started"
     expect "FIXTURE discovery add removed"
     expect "FIXTURE discovery replacement complete"
+    expect_order "discovery_content: done" \
+                 "FIXTURE discovery v2 discovery_content started"
+    expect_order "FIXTURE discovery v2 discovery_content started" \
+                 "FIXTURE discovery v1 discovery_add started"
     expect_order "FIXTURE discovery v1 discovery_replace started" \
                  "FIXTURE discovery v1 discovery_add started"
     expect_order "FIXTURE discovery v1 discovery_add started" \

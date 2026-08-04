@@ -10,6 +10,7 @@
 #include <linux/mman.h>
 #include <linux/prctl.h>
 #include <linux/reboot.h>
+#include <linux/stat.h>
 #include <linux/time.h>
 #include <linux/watchdog.h>
 #include <asm/signal.h>
@@ -94,6 +95,15 @@ enum
     K_INOTIFY_MASK_OFFSET = offsetof(struct inotify_event, mask),
     K_INOTIFY_COOKIE_OFFSET = offsetof(struct inotify_event, cookie),
     K_INOTIFY_LEN_OFFSET = offsetof(struct inotify_event, len),
+    K_STATX_SIZE_MASK = STATX_SIZE,
+    K_STATX_MTIME_MASK = STATX_MTIME,
+    K_STATX_CTIME_MASK = STATX_CTIME,
+    K_STATX_BASIC_STATS_MASK = STATX_BASIC_STATS,
+    K_STATX_TIMESTAMP_SIZE = sizeof(struct statx_timestamp),
+    K_STATX_SIZE = sizeof(struct statx),
+    K_STATX_SIZE_OFFSET = offsetof(struct statx, stx_size),
+    K_STATX_CTIME_OFFSET = offsetof(struct statx, stx_ctime),
+    K_STATX_MTIME_OFFSET = offsetof(struct statx, stx_mtime),
 };
 
 static const unsigned long long K_REBOOT_MAGIC1 = (unsigned long long)LINUX_REBOOT_MAGIC1;
@@ -149,6 +159,11 @@ enum
 #undef O_WRONLY
 #undef O_RDWR
 #undef AT_FDCWD
+#undef AT_STATX_SYNC_AS_STAT
+#undef STATX_MTIME
+#undef STATX_CTIME
+#undef STATX_SIZE
+#undef STATX_BASIC_STATS
 #undef MS_RDONLY
 #undef MS_REMOUNT
 #undef MS_NOSUID
@@ -286,6 +301,7 @@ SAME(SYS_kill, __NR_kill);
 SAME(SYS_fsync, __NR_fsync);
 SAME(SYS_ftruncate, __NR_ftruncate);
 SAME(SYS_getdents64, __NR_getdents64);
+SAME(SYS_statx, __NR_statx);
 SAME(SYS_chdir, __NR_chdir);
 SAME(SYS_umask, __NR_umask);
 SAME(SYS_setsid, __NR_setsid);
@@ -351,6 +367,15 @@ SAME(O_TRUNC, K_O_TRUNC);
 SAME(O_EXCL, K_O_EXCL);
 SAME(O_NOCTTY, K_O_NOCTTY);
 SAME(AT_FDCWD, K_AT_FDCWD);
+SAME(STATX_SIZE, K_STATX_SIZE_MASK);
+SAME(STATX_MTIME, K_STATX_MTIME_MASK);
+SAME(STATX_CTIME, K_STATX_CTIME_MASK);
+SAME(STATX_BASIC_STATS, K_STATX_BASIC_STATS_MASK);
+SAME(sizeof(KStatxTimestamp), K_STATX_TIMESTAMP_SIZE);
+SAME(sizeof(KStatx), K_STATX_SIZE);
+SAME(offsetof(KStatx, size), K_STATX_SIZE_OFFSET);
+SAME(offsetof(KStatx, ctime), K_STATX_CTIME_OFFSET);
+SAME(offsetof(KStatx, mtime), K_STATX_MTIME_OFFSET);
 
 SAME(MS_RDONLY, K_MS_RDONLY);
 SAME(MS_REMOUNT, K_MS_REMOUNT);

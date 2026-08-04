@@ -85,6 +85,56 @@ static bool CounterStable(const char *path)
     return before == after;
 }
 
+static bool CopyFile(const char *from, const char *to)
+{
+    isize src = SysOpen(from, O_RDONLY | O_CLOEXEC, 0);
+    if(src < 0)
+        return false;
+
+    isize dst = SysOpen(to, O_WRONLY | O_TRUNC | O_CLOEXEC, 0);
+    if(dst < 0)
+    {
+        SysClose((i32)src);
+        return false;
+    }
+
+    u8 buffer[1024];
+    bool bOk = true;
+    for(;;)
+    {
+        isize n = SysRead((i32)src, buffer, sizeof(buffer));
+        if(n == -EINTR)
+            continue;
+        if(n < 0)
+        {
+            bOk = false;
+            break;
+        }
+        if(n == 0)
+            break;
+
+        usize off = 0;
+        while(off < (usize)n)
+        {
+            isize written = SysWrite((i32)dst, buffer + off, (usize)n - off);
+            if(written == -EINTR)
+                continue;
+            if(written <= 0)
+            {
+                bOk = false;
+                break;
+            }
+            off += (usize)written;
+        }
+        if(!bOk)
+            break;
+    }
+
+    SysClose((i32)src);
+    SysClose((i32)dst);
+    return bOk;
+}
+
 static NORETURN void DiscoveryFail(const char *reason)
 {
     char line[128];
@@ -95,6 +145,14 @@ static NORETURN void DiscoveryFail(const char *reason)
 
 void FixtureMain(void)
 {
+    if(!WaitForConsole("init: discovery_content: done"))
+        DiscoveryFail("content task did not finish");
+    if(!CopyFile("/tasks/boot/.discovery_content_v2",
+                 "/tasks/boot/discovery_content"))
+        DiscoveryFail("content rewrite failed");
+    if(!WaitForConsole("FIXTURE discovery v2 discovery_content started"))
+        DiscoveryFail("in-place content change did not start");
+
     if(!WaitForConsole("FIXTURE discovery v1 discovery_replace started"))
         DiscoveryFail("initial task did not start");
     if(SysRename("/tasks/always/.discovery_add", "/tasks/always/discovery_add") < 0)
