@@ -2855,6 +2855,8 @@ typedef struct
     TaskWatch    taskWatch[TASK_WATCH_MAX];
     i32          taskWatchFd;
     bool         bTaskScanPending;
+    u64          taskScanReadyNs;
+    bool         bTaskScanDebounced;
     bool         bTaskScanRetry;
     u64          taskScanNextNs;
     usize        taskReportedCount;
@@ -2893,6 +2895,13 @@ extern char *G_ENVP[];
 /* Written by handlers and consumed by the event loop */
 extern volatile i32 G_SIG_CHLD;
 extern volatile i32 G_SIG_SHUTDOWN;
+
+static void TaskScanRequest(InitState *st, u64 nowNs)
+{
+    st->bTaskScanPending = true;
+    st->taskScanReadyNs = nowNs;
+    st->bTaskScanDebounced = false;
+}
 
 void TaskScanAll(InitState *st);
 void TaskStart(InitState *st, Task *t, u64 nowNs);
@@ -3993,14 +4002,21 @@ static void TaskWatchDrain(InitState *st)
         {
             LogF("task discovery: inotify read failed (%d)", (i32)n);
             TaskWatchDisable(st);
-            st->bTaskScanPending = true;
+            TaskScanRequest(st, SysBootNs());
             return;
+        }
+
+        u64 readyNs = SysBootNs() + CFG_TASK_DISCOVERY_GRACE_NS;
+        if(!st->bTaskScanPending || st->bTaskScanDebounced)
+        {
+            st->bTaskScanPending = true;
+            st->taskScanReadyNs = readyNs;
+            st->bTaskScanDebounced = true;
         }
 
         usize off = 0;
         while(off < (usize)n)
         {
-            st->bTaskScanPending = true;
             if((usize)n - off < sizeof(KInotifyEvent))
             {
                 LogF("task discovery: malformed inotify event");
@@ -4054,6 +4070,8 @@ void TaskScanAll(InitState *st)
     bool bComplete = true;
     bool bRetry = false;
     st->bTaskScanPending = false;
+    st->taskScanReadyNs = 0;
+    st->bTaskScanDebounced = false;
     st->bTaskScanRetry = false;
     st->taskScanNextNs = nowNs + CFG_TASK_SCAN_NS;
 
@@ -4224,7 +4242,7 @@ static void TaskRetire(InitState *st, Task *t, bool bReplacement, u64 nowNs)
         TaskClosePipes(t);
     }
     if(TaskCanReuse(t))
-        st->bTaskScanPending = true;
+        TaskScanRequest(st, nowNs);
 }
 
 #if FEATURE_LOG_CAPTURE
@@ -4378,7 +4396,7 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     if(bRetiring)
     {
         t->state = t->bPresent ? TS_RETIRED : TS_REMOVED;
-        st->bTaskScanPending = true;
+        TaskScanRequest(st, nowNs);
         return;
     }
 
@@ -4473,7 +4491,7 @@ static bool TaskGroupReap(InitState *st, Task *t, u64 nowNs)
                 LogFlushPartial(&t->errLine, LOG_SRC_ERR, idx, t->errPolicy);
                 TaskClosePipes(t);
                 if(t->bRetiring)
-                    st->bTaskScanPending = true;
+                    TaskScanRequest(st, nowNs);
             }
             break;
         }
@@ -4525,7 +4543,7 @@ void TaskTick(InitState *st, u64 nowNs)
                         t->state = TS_REMOVED;
                     }
                     else
-                        st->bTaskScanPending = true;
+                        TaskScanRequest(st, nowNs);
                 }
             }
             continue;
@@ -4618,7 +4636,10 @@ u64 TaskNextDeadline(const InitState *st, u64 nowNs)
     u64 best = nowNs + CFG_LOOP_MAX_WAIT_NS;
 
 #if FEATURE_TASK_DISCOVERY
+    if(st->bTaskScanPending && st->taskScanReadyNs < best)
+        best = st->taskScanReadyNs;
     if((st->taskWatchFd < 0 || st->bTaskScanRetry) &&
+       !st->bTaskScanPending &&
        st->taskScanNextNs < best)
         best = st->taskScanNextNs;
 #endif
@@ -4812,7 +4833,7 @@ bool ProbeReap(InitState *st, i32 pid, i32 status, u64 nowNs)
             t->probePid = 0;
             t->bProbeKilled = false;
             t->probeKillDeadlineNs = 0;
-            st->bTaskScanPending = true;
+            TaskScanRequest(st, nowNs);
             return true;
         }
 
@@ -6287,8 +6308,8 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
         else
         {
 #if FEATURE_TASK_DISCOVERY
-            if(st->bTaskScanPending ||
-               (nowNs >= st->taskScanNextNs &&
+            if((st->bTaskScanPending && nowNs >= st->taskScanReadyNs) ||
+               (!st->bTaskScanPending && nowNs >= st->taskScanNextNs &&
                 (st->taskWatchFd < 0 || st->bTaskScanRetry)))
                 TaskScanAll(st);
 #endif

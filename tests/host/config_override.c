@@ -35,6 +35,7 @@ typedef unsigned long long u64;
 #define CFG_SHUTDOWN_GRACE_NS (4ull * NS_PER_SEC)
 #define CFG_RESTART_GRACE_NS (3ull * NS_PER_SEC)
 #define CFG_LOOP_MAX_WAIT_NS (2ull * NS_PER_SEC)
+#define CFG_TASK_DISCOVERY_GRACE_NS (150ull * NS_PER_MS)
 #define CFG_LOGD_FLUSH_NS (90ull * NS_PER_SEC)
 #define CFG_LOGD_BUF_BYTES (96u * 1024u)
 #define CFG_LOGD_FLUSH_BYTES (48u * 1024u)

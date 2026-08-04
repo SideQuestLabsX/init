@@ -137,6 +137,7 @@ fi
 if [ "$MARKER_DISCOVERY" -ne 0 ]; then
     expect "discovery_content: done"
     expect "FIXTURE discovery v2 discovery_content started"
+    reject "FIXTURE discovery v1 discovery_content started"
     expect "FIXTURE discovery v1 discovery_replace started"
     expect "FIXTURE discovery v1 discovery_add started"
     expect "FIXTURE discovery v2 discovery_replace started"

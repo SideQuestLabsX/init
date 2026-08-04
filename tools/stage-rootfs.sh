@@ -66,6 +66,7 @@ install_bin task_tick         tasks/2s/tick
 if [ "${INIT_TASK_DISCOVERY_TEST:-0}" -ne 0 ]; then
     install_bin task_discovery_controller tasks/boot/discovery_controller
     install_bin task_oneshot tasks/boot/discovery_content
+    install_bin task_discovery_v1 tasks/boot/.discovery_content_v1
     install_bin task_discovery_v2 tasks/boot/.discovery_content_v2
     install_bin task_discovery_v1 tasks/always/discovery_replace
     install_bin task_discovery_v1 tasks/always/.discovery_add

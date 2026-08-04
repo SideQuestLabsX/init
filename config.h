@@ -131,6 +131,9 @@ _Static_assert(CFG_PATH_MAX <= 0xffffu,
 #ifndef CFG_TASK_SCAN_NS
   #define CFG_TASK_SCAN_NS      (1ull * NS_PER_SEC)
 #endif
+#ifndef CFG_TASK_DISCOVERY_GRACE_NS
+  #define CFG_TASK_DISCOVERY_GRACE_NS (250ull * NS_PER_MS)
+#endif
 
 /* disk logging */
 

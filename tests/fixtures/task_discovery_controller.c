@@ -75,14 +75,19 @@ static bool WaitForCounter(const char *path)
 
 static bool CounterStable(const char *path)
 {
-    u64 before = 0;
-    u64 after = 0;
-    if(!ReadCounter(path, &before))
-        return false;
-    FixtureSleep(500ull * NS_PER_MS);
-    if(!ReadCounter(path, &after))
-        return false;
-    return before == after;
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS; i++)
+    {
+        u64 before = 0;
+        u64 after = 0;
+        if(!ReadCounter(path, &before))
+            return false;
+        FixtureSleep(500ull * NS_PER_MS);
+        if(!ReadCounter(path, &after))
+            return false;
+        if(before == after)
+            return true;
+    }
+    return false;
 }
 
 static bool CopyFile(const char *from, const char *to)
@@ -147,6 +152,10 @@ void FixtureMain(void)
 {
     if(!WaitForConsole("init: discovery_content: done"))
         DiscoveryFail("content task did not finish");
+    if(!CopyFile("/tasks/boot/.discovery_content_v1",
+                 "/tasks/boot/discovery_content"))
+        DiscoveryFail("intermediate content rewrite failed");
+    FixtureSleep(CFG_TASK_DISCOVERY_GRACE_NS / 2);
     if(!CopyFile("/tasks/boot/.discovery_content_v2",
                  "/tasks/boot/discovery_content"))
         DiscoveryFail("content rewrite failed");
