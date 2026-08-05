@@ -49,7 +49,7 @@ install_bin task_log_interleave_a tasks/always/log_interleave_a
 install_bin task_log_interleave_b tasks/always/log_interleave_b
 install_bin task_flap         tasks/always/flap
 install_bin task_ok           tasks/always/hangcheck
-install_bin probe_hang        tasks/always/hangcheck.check
+install_bin probe_tree        tasks/always/hangcheck.check
 install_bin task_selftest     tasks/always/selftest
 install_bin task_exit_delayed tasks/always/midprobe
 install_bin probe_hang        tasks/always/midprobe.check
@@ -64,6 +64,7 @@ install_bin task_stable       tasks/boot/stable
 install_bin task_tick         tasks/2s/tick
 
 if [ "${INIT_TASK_DISCOVERY_TEST:-0}" -ne 0 ]; then
+    : > "$STAGE/dev/discovery-test"
     install_bin task_discovery_controller tasks/boot/discovery_controller
     install_bin task_oneshot tasks/boot/discovery_content
     install_bin task_discovery_v1 tasks/boot/.discovery_content_v1

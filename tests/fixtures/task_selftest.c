@@ -219,6 +219,10 @@ void FixtureMain(void)
     }
 #endif
 
+    if(FileExists("/dev/discovery-test") &&
+       !WaitForFile("/dev/discovery-complete", FIXTURE_WAIT_ATTEMPTS * 4u))
+        FixtureSay("FIXTURE discovery completion incomplete");
+
 #if FEATURE_EXEC_PROBES
 #if !FEATURE_LOG_DISK
     if(!WaitForConsoleCompletion())

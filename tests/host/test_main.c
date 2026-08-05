@@ -270,6 +270,63 @@ static void TestNames(void)
                          sizeof(storage[0]), tooLong));
 }
 
+static void TestDiscovery(void)
+{
+    GROUP("discovery");
+
+    char *names[3];
+    char storage[3][16];
+    u64 values[3];
+    usize count = 0;
+    CHECK(NameSetInsertValue(names, values, (char *)storage, &count, 3,
+                             sizeof(storage[0]), "delta", 4));
+    CHECK(NameSetInsertValue(names, values, (char *)storage, &count, 3,
+                             sizeof(storage[0]), "beta", 2));
+    CHECK(NameSetInsertValue(names, values, (char *)storage, &count, 3,
+                             sizeof(storage[0]), "zeta", 6));
+    CHECK(NameSetInsertValue(names, values, (char *)storage, &count, 3,
+                             sizeof(storage[0]), "alpha", 1));
+    CHECK(!NameSetInsertValue(names, values, (char *)storage, &count, 3,
+                              sizeof(storage[0]), "gamma", 5));
+    CHECK(count == 3 && StrEq(names[0], "alpha") && values[0] == 1);
+    CHECK(StrEq(names[1], "beta") && values[1] == 2);
+    CHECK(StrEq(names[2], "delta") && values[2] == 4);
+
+    u8 raw[sizeof(KInotifyEvent) + 4];
+    usize eventSize = 0;
+    memset(raw, 0, sizeof(raw));
+    KInotifyEvent *event = (KInotifyEvent *)raw;
+    event->mask = IN_Q_OVERFLOW;
+    CHECK(TaskWatchEventValid(event, sizeof(KInotifyEvent), &eventSize) &&
+          eventSize == sizeof(KInotifyEvent));
+    CHECK(!TaskWatchEventValid(event, sizeof(KInotifyEvent) - 1, NULL));
+
+    event->len = 4;
+    memset(event->name, 'x', 4);
+    CHECK(TaskWatchEventValid(event, sizeof(raw), &eventSize) &&
+          eventSize == sizeof(raw));
+    char name[8];
+    CHECK(!TaskWatchEventName(event, name, sizeof(name)));
+    event->name[2] = '\0';
+    CHECK(TaskWatchEventName(event, name, sizeof(name)) && StrEq(name, "xx"));
+    CHECK(!TaskWatchEventValid(event, sizeof(KInotifyEvent) + 3, NULL));
+
+    u64 startNs = 100;
+    u64 lastNs = 0;
+    bool bKilled = false;
+    i32 lastRc = 0;
+    CHECK(!ProbeTimeoutRecord(&startNs, &bKilled, &lastNs, &lastRc,
+                              199, 1000));
+    CHECK(ProbeTimeoutRecord(&startNs, &bKilled, &lastNs, &lastRc,
+                             1100, 1000));
+    CHECK(startNs == 1100 && lastNs == 1100 && bKilled &&
+          lastRc == -(i32)SIGKILL);
+    CHECK(!ProbeTimeoutRecord(&startNs, &bKilled, &lastNs, &lastRc,
+                              2099, 1000));
+    CHECK(ProbeTimeoutRecord(&startNs, &bKilled, &lastNs, &lastRc,
+                             2100, 1000));
+}
+
 static void TestArena(void)
 {
     GROUP("arena");
@@ -820,6 +877,7 @@ int main(void)
     TestStrings();
     TestNumbers();
     TestNames();
+    TestDiscovery();
     TestArena();
     TestRing();
     TestStatus();

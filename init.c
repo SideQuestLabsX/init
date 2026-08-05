@@ -859,6 +859,10 @@ bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
 bool NameSetInsertValue(char **names, u64 *values, char *storage, usize *count,
                         usize maxEntries, usize nameCap, const char *name,
                         u64 value);
+bool TaskWatchEventValid(const void *data, usize bytes, usize *sizeOut);
+bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap);
+bool ProbeTimeoutRecord(u64 *startNs, bool *bKilled, u64 *lastNs,
+                        i32 *lastRc, u64 nowNs, u64 timeoutNs);
 u8 LogPolicyResolve(u8 policy, u8 defaultPolicy);
 
 #ifndef INIT_HOSTED
@@ -1008,6 +1012,38 @@ usize StrCopyN(char *dst, usize cap, const char *src, usize n)
     }
     dst[i] = '\0';
     return i;
+}
+
+bool TaskWatchEventValid(const void *data, usize bytes, usize *sizeOut)
+{
+    if(bytes < sizeof(KInotifyEvent))
+        return false;
+
+    const KInotifyEvent *event = (const KInotifyEvent *)data;
+    usize nameBytes = (usize)event->len;
+    if(nameBytes > bytes - sizeof(KInotifyEvent))
+        return false;
+
+    if(sizeOut != NULL)
+        *sizeOut = sizeof(KInotifyEvent) + nameBytes;
+    return true;
+}
+
+bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap)
+{
+    if(event->len == 0 || cap == 0)
+        return false;
+
+    usize limit = event->len;
+    for(usize i = 0; i < limit; i++)
+    {
+        if(event->name[i] == '\0')
+        {
+            StrCopyN(name, cap, event->name, i);
+            return i < cap;
+        }
+    }
+    return false;
 }
 
 usize StrCat(char *dst, usize cap, const char *src)
@@ -1511,6 +1547,19 @@ bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
 {
     return NameSetInsertValue(names, NULL, storage, count, maxEntries, nameCap,
                               name, 0);
+}
+
+bool ProbeTimeoutRecord(u64 *startNs, bool *bKilled, u64 *lastNs,
+                        i32 *lastRc, u64 nowNs, u64 timeoutNs)
+{
+    if(nowNs - *startNs < timeoutNs)
+        return false;
+
+    *startNs = nowNs;
+    *bKilled = true;
+    *lastNs = nowNs;
+    *lastRc = -(i32)SIGKILL;
+    return true;
 }
 
 /* boot arena */
@@ -2855,6 +2904,7 @@ typedef struct
     usize        taskCount;
     TaskWatch    taskWatch[TASK_WATCH_MAX];
     i32          taskWatchFd;
+    bool         bTaskWatchReopen;
     bool         bTaskScanPending;
     u64          taskScanReadyNs;
     bool         bTaskScanDebounced;
@@ -3055,10 +3105,7 @@ bool DirRead(const char *path, Arena *a, DirList *out, usize maxEntries, u8 want
     SysClose((i32)fd);
 
     if(dropped != 0)
-    {
         LogF("%s: %zu entries omitted after limit %zu", path, dropped, maxEntries);
-        return false;
-    }
     out->name = names;
     out->ino = inos;
     out->count = count;
@@ -3882,6 +3929,7 @@ static void TaskWatchOpen(InitState *st)
 
 static void TaskWatchDisable(InitState *st)
 {
+    bool bWasOpen = st->taskWatchFd >= 0;
     if(st->taskWatchFd >= 0)
         SysClose(st->taskWatchFd);
     st->taskWatchFd = -1;
@@ -3891,10 +3939,18 @@ static void TaskWatchDisable(InitState *st)
         st->taskWatch[i].bActive = false;
         st->taskWatch[i].path[0] = '\0';
     }
+    if(bWasOpen)
+        st->bTaskWatchReopen = true;
 }
 
 static void TaskWatchRefresh(InitState *st)
 {
+    if(st->taskWatchFd < 0 && st->bTaskWatchReopen)
+    {
+        TaskWatchOpen(st);
+        if(st->taskWatchFd >= 0)
+            st->bTaskWatchReopen = false;
+    }
     if(st->taskWatchFd < 0)
         return;
 
@@ -3945,23 +4001,6 @@ static void TaskWatchRefresh(InitState *st)
         }
     }
     ArenaReset(&st->arena, mark);
-}
-
-static bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap)
-{
-    if(event->len == 0)
-        return false;
-
-    usize limit = event->len;
-    for(usize i = 0; i < limit; i++)
-    {
-        if(event->name[i] == '\0')
-        {
-            StrCopyN(name, cap, event->name, i);
-            return i < cap;
-        }
-    }
-    return false;
 }
 
 static void TaskMarkPathChanged(InitState *st, const char *path)
@@ -4027,8 +4066,8 @@ static void TaskWatchDrain(InitState *st)
             }
 
             const KInotifyEvent *event = (const KInotifyEvent *)(buffer + off);
-            usize size = sizeof(KInotifyEvent) + (usize)event->len;
-            if(size < sizeof(KInotifyEvent) || size > (usize)n - off)
+            usize size = 0;
+            if(!TaskWatchEventValid(event, (usize)n - off, &size))
             {
                 LogF("task discovery: malformed inotify event length");
                 TaskMarkAllChanged(st);
@@ -4043,6 +4082,13 @@ static void TaskWatchDrain(InitState *st)
             else
             {
                 TaskWatch *watch = TaskWatchFind(st, event->wd);
+                if(watch != NULL &&
+                   (event->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) != 0)
+                {
+                    TaskWatchDisable(st);
+                    TaskScanRequest(st, SysBootNs());
+                    return;
+                }
                 char name[CFG_NAME_MAX];
                 if(watch != NULL && (event->mask & IN_ISDIR) == 0 &&
                    TaskWatchEventName(event, name, sizeof(name)))
@@ -4050,11 +4096,6 @@ static void TaskWatchDrain(InitState *st)
                     char path[CFG_PATH_MAX];
                     if(PathJoinOk(path, sizeof(path), watch->path, name))
                         TaskMarkPathChanged(st, path);
-                }
-                if((event->mask & IN_IGNORED) != 0 && watch != NULL)
-                {
-                    watch->wd = -1;
-                    watch->path[0] = '\0';
                 }
             }
             off += size;
@@ -4793,13 +4834,11 @@ void ProbeTick(InitState *st, Task *t, u64 nowNs)
         if(nowNs - t->probeStartNs < t->probeTimeoutNs)
             return;
 
-        SysKill(t->probePid, SIGKILL);
-        t->probeStartNs = nowNs;
-
         /* Count before reap because uninterruptible I/O can defer SIGKILL */
-        t->bProbeKilled = true;
-        t->lastProbeNs = nowNs;
-        t->lastProbeRc = -(i32)SIGKILL;
+        ProbeTimeoutRecord(&t->probeStartNs, &t->bProbeKilled,
+                           &t->lastProbeNs, &t->lastProbeRc,
+                           nowNs, t->probeTimeoutNs);
+        SignalChild(t->probePid, SIGKILL);
         LogF("%s: probe timed out, killing pid %d", TaskName(t), t->probePid);
         ProbeFailed(t, nowNs);
         return;

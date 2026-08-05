@@ -142,13 +142,13 @@ static bool CounterStable(const char *path)
     return false;
 }
 
-static bool CopyFile(const char *from, const char *to)
+static bool CopyFile(const char *from, const char *to, i32 mode)
 {
     isize src = SysOpen(from, O_RDONLY | O_CLOEXEC, 0);
     if(src < 0)
         return false;
 
-    isize dst = SysOpen(to, O_WRONLY | O_TRUNC | O_CLOEXEC, 0);
+    isize dst = SysOpen(to, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
     if(dst < 0)
     {
         SysClose((i32)src);
@@ -192,6 +192,142 @@ static bool CopyFile(const char *from, const char *to)
     return bOk;
 }
 
+static bool LimitPath(char *path, usize cap, u32 index)
+{
+    char tens = (char)('0' + index / 10u);
+    char ones = (char)('0' + index % 10u);
+    return Fmt(path, cap, "/tasks/boot/zz-limit-%c%c", tens, ones) != 0;
+}
+
+static bool CreateLimitFiles(void)
+{
+    for(u32 i = 0; i < 50; i++)
+    {
+        char path[CFG_PATH_MAX];
+        if(!LimitPath(path, sizeof(path), i) ||
+           !CopyFile("/tasks/boot/oneshot", path, 0644))
+            return false;
+    }
+    return true;
+}
+
+static bool RemoveLimitFiles(void)
+{
+    for(u32 i = 0; i < 50; i++)
+    {
+        char path[CFG_PATH_MAX];
+        if(!LimitPath(path, sizeof(path), i) || SysUnlink(path) < 0)
+            return false;
+    }
+    return true;
+}
+
+#define INOTIFY_FLOOD_WORKERS 1u
+#define INOTIFY_FLOOD_ROUNDS 6000u
+
+static bool Touch(const char *path);
+
+static NORETURN void FloodWorker(u32 worker)
+{
+    for(u32 i = 0; i < INOTIFY_FLOOD_ROUNDS; i++)
+    {
+        char path[CFG_PATH_MAX];
+        Fmt(path, sizeof(path), "/tasks/.overflow-%u-%u", worker, i);
+        isize fd = SysOpen(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+        if(fd < 0)
+        {
+            SysExit(1);
+        }
+        SysClose((i32)fd);
+        if(SysUnlink(path) < 0)
+            SysExit(1);
+    }
+    SysExit(0);
+}
+
+static bool InotifyOverflowed(i32 fd)
+{
+    u8 buffer[4096] __attribute__((aligned(8)));
+    for(;;)
+    {
+        isize n = SysRead(fd, buffer, sizeof(buffer));
+        if(n == -EAGAIN)
+            return false;
+        if(n == -EINTR)
+            continue;
+        if(n <= 0)
+            return false;
+
+        usize off = 0;
+        while(off < (usize)n)
+        {
+            usize size = 0;
+            const KInotifyEvent *event = (const KInotifyEvent *)(buffer + off);
+            if(!TaskWatchEventValid(event, (usize)n - off, &size))
+                return false;
+            if((event->mask & IN_Q_OVERFLOW) != 0)
+                return true;
+            off += size;
+        }
+    }
+}
+
+static bool FloodInotify(void)
+{
+    isize watchFd = SysInotifyInit1(O_NONBLOCK | O_CLOEXEC);
+    if(watchFd < 0)
+        return false;
+    isize watch = SysInotifyAddWatch((i32)watchFd, "/tasks",
+                                     IN_CREATE | IN_DELETE | IN_MOVED_FROM |
+                                     IN_MOVED_TO | IN_CLOSE_WRITE | IN_ATTRIB |
+                                     IN_ONLYDIR);
+    if(watch < 0)
+    {
+        SysClose((i32)watchFd);
+        return false;
+    }
+
+    i32 pids[INOTIFY_FLOOD_WORKERS];
+    usize spawned = 0;
+    bool bOk = true;
+    for(u32 i = 0; i < INOTIFY_FLOOD_WORKERS; i++)
+    {
+        isize pid = SysFork();
+        if(pid < 0)
+        {
+            bOk = false;
+            break;
+        }
+        if(pid == 0)
+            FloodWorker(i);
+        pids[spawned++] = (i32)pid;
+    }
+
+    for(usize i = 0; i < spawned; i++)
+    {
+        i32 status = 0;
+        isize pid;
+        do
+        {
+            pid = SysWait4(pids[i], &status, 0);
+        } while(pid == -EINTR);
+        if(pid != pids[i] || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            bOk = false;
+    }
+    bool bOverflowed = InotifyOverflowed((i32)watchFd);
+    SysClose((i32)watchFd);
+    return bOk && spawned == INOTIFY_FLOOD_WORKERS && bOverflowed;
+}
+
+static bool Touch(const char *path)
+{
+    isize fd = SysOpen(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+    if(fd < 0)
+        return false;
+    SysClose((i32)fd);
+    return true;
+}
+
 static NORETURN void DiscoveryFail(const char *reason)
 {
     char line[128];
@@ -205,11 +341,11 @@ void FixtureMain(void)
     if(!WaitForConsole("init: discovery_content: done"))
         DiscoveryFail("content task did not finish");
     if(!CopyFile("/tasks/boot/.discovery_content_v1",
-                 "/tasks/boot/discovery_content"))
+                 "/tasks/boot/discovery_content", 0755))
         DiscoveryFail("intermediate content rewrite failed");
     FixtureSleep(CFG_TASK_DISCOVERY_GRACE_NS / 2);
     if(!CopyFile("/tasks/boot/.discovery_content_v2",
-                 "/tasks/boot/discovery_content"))
+                 "/tasks/boot/discovery_content", 0755))
         DiscoveryFail("content rewrite failed");
     if(!WaitForConsole("FIXTURE discovery v2 discovery_content started"))
         DiscoveryFail("in-place content change did not start");
@@ -247,6 +383,41 @@ void FixtureMain(void)
     if(!WaitForStatusTombstones())
         DiscoveryFail("tombstone status snapshot missing");
     FixtureSay("FIXTURE discovery tombstones verified");
+
+    if(!CreateLimitFiles())
+        DiscoveryFail("directory limit setup failed");
+    if(!WaitForConsole("init: zz-limit-00: not executable, skipped"))
+        DiscoveryFail("directory limit scan did not run");
+    FixtureSleep(500ull * NS_PER_MS);
+    if(ConsoleContains("init: zz-limit-49: not executable, skipped"))
+        DiscoveryFail("directory scan kept an oversized entry");
+    if(!RemoveLimitFiles())
+        DiscoveryFail("directory limit cleanup failed");
+    FixtureSay("FIXTURE discovery directory bound verified");
+
+    if(SysRename("/tasks", "/tasks-away") < 0)
+        DiscoveryFail("task root rename failed");
+    if(!WaitForConsole("task scan: cannot read /tasks, preserving current tasks"))
+        DiscoveryFail("incomplete scan was not retried");
+    if(!CounterStable("/dev/discovery-discovery_replace-v1"))
+        DiscoveryFail("incomplete scan changed a live task");
+    if(SysRename("/tasks-away", "/tasks") < 0)
+        DiscoveryFail("task root restore failed");
+    if(!CopyFile("/tasks/boot/.discovery_content_v1",
+                 "/tasks/boot/discovery_retry", 0755))
+        DiscoveryFail("retry task setup failed");
+    if(!WaitForConsole("FIXTURE discovery v1 discovery_retry started"))
+        DiscoveryFail("incomplete scan did not recover");
+    FixtureSay("FIXTURE discovery scan retry verified");
+    SysUnlink("/tasks/boot/discovery_retry");
+
+    bool bFlooded = FloodInotify();
+    if(!bFlooded)
+        DiscoveryFail("inotify overflow flood failed");
+    FixtureSay("FIXTURE discovery overflow verified");
+
+    if(!Touch("/dev/discovery-complete"))
+        DiscoveryFail("discovery completion marker failed");
     FixtureSay("FIXTURE discovery replacement complete");
     SysExit(0);
 }

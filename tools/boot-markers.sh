@@ -164,13 +164,23 @@ if [ "$MARKER_DISCOVERY" -ne 0 ]; then
         expect_order "FIXTURE discovery v1 discovery_new started" \
                      "FIXTURE discovery tombstones verified"
         expect_order "FIXTURE discovery tombstones verified" \
-                     "FIXTURE discovery replacement complete"
+                     "FIXTURE discovery directory bound verified"
     fi
+    expect "FIXTURE discovery directory bound verified"
+    expect "FIXTURE discovery scan retry verified"
+    expect "FIXTURE discovery overflow verified"
+    expect_order "FIXTURE discovery directory bound verified" \
+                 "FIXTURE discovery scan retry verified"
+    expect_order "FIXTURE discovery scan retry verified" \
+                 "FIXTURE discovery overflow verified"
+    expect_order "FIXTURE discovery overflow verified" \
+                 "FIXTURE discovery replacement complete"
     expect_order "FIXTURE discovery v1 discovery_new started" \
                  "FIXTURE discovery replacement complete"
     expect_order "FIXTURE discovery add removed" \
                  "FIXTURE discovery replacement complete"
     reject "FIXTURE discovery failed:"
+    reject "FIXTURE discovery completion incomplete"
 fi
 
 if [ "$MARKER_LOGD" -ne 0 ]; then
@@ -210,6 +220,7 @@ fi
 
 if [ "$MARKER_PROBES" -ne 0 ]; then
     expect "FIXTURE probe ran"
+    expect "FIXTURE probe tree started"
     expect "hangcheck: probe timed out, killing pid"
     expect "hangcheck: restarting on probe failure"
     expect "hangcheck: FAILED after"
@@ -229,6 +240,17 @@ if [ "$MARKER_PROBES" -ne 0 ]; then
         fail=1
     else
         echo "  ok    tree worker stopped with its process group"
+    fi
+
+    if awk '
+        index($0, "hangcheck: FAILED after") { bAfter = 1; next }
+        bAfter && index($0, "FIXTURE probe tree worker alive") { bFound = 1; exit }
+        END { exit bFound ? 1 : 0 }
+    ' "$LOG"; then
+        echo "  ok    probe worker stopped with its process group"
+    else
+        echo "  BAD   probe worker survived its timeout"
+        fail=1
     fi
 fi
 
