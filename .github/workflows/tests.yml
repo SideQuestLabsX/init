@@ -258,7 +258,8 @@ jobs:
         if: matrix.arch == 'loongarch64'
         run: |
           firmware="$RUNNER_TEMP/QEMU_EFI.fd"
-          curl -fsSL \
+          curl -fsSL --http1.1 --retry 5 --retry-delay 2 \
+            --retry-max-time 120 --retry-all-errors \
             https://raw.githubusercontent.com/yangxiaojuan-loongson/qemu-binary/a688a39a8be458aae7b6e5db20b0457eca67525f/QEMU_EFI.fd \
             -o "$firmware"
           echo "f55fbf5d92e885844631ae9bfa8887f659bbb4f6ef2beea9e9ff8bc0603b6697  $firmware" | sha256sum -c -

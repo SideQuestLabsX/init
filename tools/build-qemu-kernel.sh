@@ -103,9 +103,13 @@ KERNEL_ARCHIVE="$KERNEL_ROOT/linux-$KERNEL_VERSION.tar.xz"
 KERNEL_SOURCE="$KERNEL_ROOT/linux-$KERNEL_VERSION"
 if [ ! -d "$KERNEL_SOURCE" ]; then
     if [ ! -r "$KERNEL_ARCHIVE" ]; then
-        curl -fsSL \
+        KERNEL_DOWNLOAD="$KERNEL_ARCHIVE.part"
+        rm -f "$KERNEL_DOWNLOAD"
+        curl -fsSL --http1.1 --retry 5 --retry-delay 2 \
+            --retry-max-time 120 --retry-all-errors \
             "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KERNEL_VERSION.tar.xz" \
-            -o "$KERNEL_ARCHIVE"
+            -o "$KERNEL_DOWNLOAD"
+        mv "$KERNEL_DOWNLOAD" "$KERNEL_ARCHIVE"
     fi
     echo "$KERNEL_SHA256  $KERNEL_ARCHIVE" | sha256sum -c - >&2
     tar -xf "$KERNEL_ARCHIVE" -C "$KERNEL_ROOT"
