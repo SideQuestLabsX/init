@@ -19,6 +19,7 @@ fi
 
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/init-fault-tests.XXXXXX")
 NULL_LOG="$BUILD/ns-null-device.log"
+NULL_TRACE="$BUILD/ns-null-device.trace"
 CLOCK_LOG="$BUILD/ns-clock-failure.log"
 CLOCK_TRACE="$BUILD/ns-clock-failure.trace"
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
@@ -30,10 +31,11 @@ chmod 0666 "$STAGE/dev/console"
 : > "$STAGE/dev/null"
 chmod 0666 "$STAGE/dev/null"
 
-rm -f "$NULL_LOG"
+rm -f "$NULL_LOG" "$NULL_TRACE"
 rm "$STAGE/dev/null"
 set +e
-timeout 4 unshare --user --map-root-user --mount --pid --fork \
+timeout 4 strace -f -qq -e trace=execve,exit_group -o "$NULL_TRACE" \
+    unshare --user --map-root-user --mount --pid --fork \
     chroot "$STAGE" /init > "$NULL_LOG" 2>&1
 rc=$?
 set -e
@@ -49,6 +51,11 @@ esac
 if ! grep -qF 'init: child open /dev/null failed, errno 2' "$NULL_LOG"; then
     cat "$NULL_LOG"
     echo "FAIL: missing null-device child failure"
+    exit 1
+fi
+if ! grep -qF 'exit_group(126)' "$NULL_TRACE"; then
+    cat "$NULL_TRACE"
+    echo "FAIL: null-device child did not exit with status 126"
     exit 1
 fi
 if grep -qF 'FIXTURE ok started' "$NULL_LOG"; then

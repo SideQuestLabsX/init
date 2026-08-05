@@ -98,15 +98,18 @@ status_reader=${INIT_STATUS_READER:-0}
 status_fallback=${INIT_STATUS_FALLBACK:-0}
 remount_test=${INIT_NS_REMOUNT_TEST:-0}
 discovery_test=${INIT_TASK_DISCOVERY_TEST:-0}
+
+unset MARKER_LOGD MARKER_NS_TIER MARKER_CHILD_ERROR MARKER_PROBES \
+      MARKER_LOGFILE MARKER_CAPTURE MARKER_SNTP MARKER_STATUS \
+      MARKER_STATUS_FALLBACK MARKER_DISCOVERY MARKER_NAMESPACE \
+      MARKER_SNTP_CLOCK_SET EXPECT_TASKS
+
 case "${FEATURE_VARIANT:-}" in
     OFFLINE_MODE=1)
         sntp_fixture=0
         ;;
     FEATURE_LOG_DISK=0)
         logd_fixture=0
-        ;;
-    FEATURE_CAPABILITY_DROP=0)
-        privilege_fixtures=0
         ;;
 esac
 if [ "$log_symlink" -ne 0 ]; then
@@ -124,7 +127,7 @@ INIT_TASK_DISCOVERY_TEST=$discovery_test \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
 task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + 3 * discovery_test))
-EXPECT_TASKS="${EXPECT_TASKS:-$task_count}"
+EXPECT_TASKS=$task_count
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
 fi
@@ -227,6 +230,8 @@ if [ "$remount_test" -ne 0 ]; then
             sub(/".*$/, "", path)
             depth = gsub(/\//, "/", path)
             testCount++
+            if(!index($0, "MS_RDONLY"))
+                bBadFlags = 1
             if(index($0, ") = 0"))
                 bSuccess++
             else if(index($0, ") = -1 EPERM"))
@@ -259,7 +264,7 @@ if [ "$remount_test" -ne 0 ]; then
             }
             exit !(testCount == 52 && deepestCount == 1 && decodedCount == 1 &&
                    earlyLine > 0 && shallowLine > 0 && earlyLine < shallowLine &&
-                   !bBadOrder && !bBadChain && !bBadResult &&
+                   !bBadFlags && !bBadOrder && !bBadChain && !bBadResult &&
                    (bSuccess == testCount || bPermission == testCount))
         }
     ' "$MOUNT_TRACE"; then

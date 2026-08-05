@@ -63,8 +63,8 @@ static bool StatusHasTombstones(void)
     StatusSnapshot snapshot;
     StatusSeq sequence;
     bool bRead = StatusRead((const StatusBlock *)mapped, &snapshot, &sequence);
-    bool bRemoved = false;
-    bool bNew = false;
+    usize removedIndex = CFG_MAX_TASKS;
+    usize newIndex = CFG_MAX_TASKS;
     if(bRead && snapshot.magic == STATUS_MAGIC &&
        snapshot.version == STATUS_VERSION && snapshot.count <= CFG_MAX_TASKS)
     {
@@ -72,14 +72,15 @@ static bool StatusHasTombstones(void)
         {
             const StatusEntry *entry = &snapshot.task[i];
             if(StrEq(entry->name, "discovery_add") && entry->state == TS_REMOVED)
-                bRemoved = true;
+                removedIndex = i;
             if(StrEq(entry->name, "discovery_new"))
-                bNew = true;
+                newIndex = i;
         }
     }
 
     SysMunmap(mapped, sizeof(StatusBlock));
-    return bRemoved && bNew;
+    return removedIndex != CFG_MAX_TASKS && newIndex != CFG_MAX_TASKS &&
+           removedIndex != newIndex;
 }
 
 static bool WaitForStatusTombstones(void)

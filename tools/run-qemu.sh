@@ -9,6 +9,12 @@ LOG="$BUILD/qemu-console.log"
 KERNEL="${KERNEL:-}"
 DTB="${DTB:-}"
 BIOS="${BIOS:-}"
+
+unset MARKER_LOGD MARKER_NS_TIER MARKER_CHILD_ERROR MARKER_PROBES \
+      MARKER_LOGFILE MARKER_CAPTURE MARKER_SNTP MARKER_STATUS \
+      MARKER_STATUS_FALLBACK MARKER_DISCOVERY MARKER_NAMESPACE \
+      MARKER_SNTP_CLOCK_SET EXPECT_TASKS
+
 MARKER_ARCH="$ARCH"
 MARKER_SHUTDOWN_SIGNAL=10
 NEEDS_DTB=0
@@ -157,6 +163,16 @@ while kill -0 "$QEMU_PID" 2>/dev/null; do
 done
 wait "$QEMU_PID"
 QEMU_CHILD_RC=$?
+if [ "$QEMU_COMPLETE" -eq 0 ]; then
+    if [ "$WATCHDOG_TEST" -ne 0 ]; then
+        boot_count=$(grep -cF "watchdog armed" "$LOG" 2>/dev/null || true)
+        if [ "$boot_count" -ge 2 ]; then
+            QEMU_COMPLETE=1
+        fi
+    elif grep -qF "reboot: Restarting system" "$LOG" 2>/dev/null; then
+        QEMU_COMPLETE=1
+    fi
+fi
 if [ "$QEMU_COMPLETE" -ne 0 ]; then
     QEMU_RC=0
 elif [ "$QEMU_TIMED_OUT" -ne 0 ]; then
@@ -220,6 +236,13 @@ echo "checking markers:"
 export MARKER_ARCH
 export MARKER_SHUTDOWN_SIGNAL
 . tools/boot-markers.sh
+
+if [ "$QEMU_COMPLETE" -eq 0 ]; then
+    echo "  BAD   qemu exited before the reboot marker"
+    fail=1
+else
+    echo "  ok    reboot marker observed"
+fi
 
 if [ $QEMU_RC -ne 0 ]; then
     echo "  BAD   qemu exited $QEMU_RC (expected 0 from the reboot syscall)"

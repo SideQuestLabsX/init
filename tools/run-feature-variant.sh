@@ -124,7 +124,19 @@ case "$FEATURE_VARIANT" in
         echo "ok: FEATURE_LOG_CAPTURE=0 captured no task stderr"
         ;;
     FEATURE_CAPABILITY_DROP=0)
-        reject_trace 'capset('
+        if grep -qF 'capset(' "$trace"; then
+            echo "BAD: FEATURE_CAPABILITY_DROP=0 issued capset in a child"
+            exit 1
+        fi
+        if ! grep -qF 'FIXTURE caps status Uid 0 0 0 0' "$BUILD/ns-console.log"; then
+            echo "BAD: FEATURE_CAPABILITY_DROP=0 did not run the caps fixture"
+            exit 1
+        fi
+        if ! grep -qF 'FIXTURE caps status NoNewPrivs 0' "$BUILD/ns-console.log"; then
+            echo "BAD: FEATURE_CAPABILITY_DROP=0 changed child privilege state"
+            exit 1
+        fi
+        echo "ok: FEATURE_CAPABILITY_DROP=0 retained the unmodified child privilege state"
         ;;
     FEATURE_TASK_DISCOVERY=0)
         reject_trace 'inotify_init1('
