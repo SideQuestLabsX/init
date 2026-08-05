@@ -166,6 +166,11 @@ FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -static -no-pie \
                   -fno-stack-protector -fno-builtin -fno-common \
                   -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH) \
                   $(FIXTURE_EXTRA_CFLAGS)
+FIXTURE_LDFLAGS := -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
+# The pinned arm64 kernel uses 4 KiB pages
+ifeq ($(ARCH),aarch64)
+  FIXTURE_LDFLAGS += -Wl,-z,max-page-size=0x1000
+endif
 
 fixtures: $(FIXTURE_BIN)
 
@@ -173,7 +178,7 @@ $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
                      tests/fixtures/fixture.h init.c armv6-div.S $(CONFIG_DEPS) | $(BUILD)
 	@mkdir -p $(BUILD)/fixtures
 	$(CC) $(FIXTURE_CFLAGS) $< tests/fixtures/fstart.S -o $@ \
-	      -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
+	      $(FIXTURE_LDFLAGS) -lgcc
 
 STATUS_READER := $(BUILD)/init-status
 STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
