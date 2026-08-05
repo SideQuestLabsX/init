@@ -1,4 +1,4 @@
-/* Tests timeout accounting with a killable sleeper, not uninterruptible I/O */
+/* Covers portable probe cancellation with a killable sleeper, not D-state I/O */
 #include "fixture.h"
 
 void FixtureMain(void)

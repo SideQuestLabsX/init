@@ -310,7 +310,13 @@ static void TestDiscovery(void)
     event->name[2] = '\0';
     CHECK(TaskWatchEventName(event, name, sizeof(name)) && StrEq(name, "xx"));
     CHECK(!TaskWatchEventValid(event, sizeof(KInotifyEvent) + 3, NULL));
+}
 
+static void TestProbeTimeout(void)
+{
+    GROUP("probes");
+
+    /* Model a D-state probe that stays unreaped across timeout intervals */
     u64 startNs = 100;
     u64 lastNs = 0;
     bool bKilled = false;
@@ -325,6 +331,8 @@ static void TestDiscovery(void)
                               2099, 1000));
     CHECK(ProbeTimeoutRecord(&startNs, &bKilled, &lastNs, &lastRc,
                              2100, 1000));
+    CHECK(startNs == 2100 && lastNs == 2100 && bKilled &&
+          lastRc == -(i32)SIGKILL);
 }
 
 static void TestArena(void)
@@ -878,6 +886,7 @@ int main(void)
     TestNumbers();
     TestNames();
     TestDiscovery();
+    TestProbeTimeout();
     TestArena();
     TestRing();
     TestStatus();

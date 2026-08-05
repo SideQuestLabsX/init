@@ -1549,6 +1549,7 @@ bool NameSetInsert(char **names, char *storage, usize *count, usize maxEntries,
                               name, 0);
 }
 
+/* Timeout accounting stays valid while wait4 cannot reap the probe */
 bool ProbeTimeoutRecord(u64 *startNs, bool *bKilled, u64 *lastNs,
                         i32 *lastRc, u64 nowNs, u64 timeoutNs)
 {
