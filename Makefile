@@ -242,7 +242,7 @@ check:
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
                     FEATURE_CAPABILITY_DROP=0 FEATURE_TASK_DISCOVERY=0 \
-                    FEATURE_PERSIST_SCHEDULE=1
+                    FEATURE_PERSIST_SCHEDULE=1 FEATURE_STATIC_TASKS=1
 
 CC_x86_64      ?= gcc
 CC_x86         ?= gcc
@@ -291,6 +291,10 @@ test-variant:
 	fi; \
 	if [ "$$v" = FEATURE_LOG_DISK=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_LOG_DISK_DISABLED=1"; \
+	fi; \
+	if [ "$$v" = FEATURE_STATIC_TASKS=1 ]; then \
+		extra="$$extra -DINIT_STATIC_TASKS_H='\"tests/fixtures/static_tasks.h\"'"; \
+		fixture_extra="$$fixture_extra -DINIT_STATIC_TASKS_H='\"tests/fixtures/static_tasks.h\"'"; \
 	fi; \
 	build="build/variant-$$k"; \
 	rm -rf "$$build"; \

@@ -2955,6 +2955,9 @@ static void TaskScanRequest(InitState *st, u64 nowNs)
 }
 
 void TaskScanAll(InitState *st);
+#if FEATURE_STATIC_TASKS
+static void TaskLoadStatic(InitState *st);
+#endif
 void TaskStart(InitState *st, Task *t, u64 nowNs);
 void TaskTick(InitState *st, u64 nowNs);
 bool TaskReap(InitState *st, i32 pid, i32 status, u64 nowNs);
@@ -3724,6 +3727,41 @@ static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
     return true;
 }
 
+#if FEATURE_STATIC_TASKS
+
+static bool TaskBuildStaticSpec(InitState *st, Task *t,
+                                const StaticTaskSpec *entry, u64 nowNs)
+{
+    if(entry->schedule == NULL || entry->name == NULL || entry->name[0] == '\0' ||
+       entry->name[0] == '.' || StrChr(entry->name, '/') != NULL)
+    {
+        LogF("static task entry is malformed");
+        return false;
+    }
+
+    u32 schedule;
+    u64 intervalNs;
+    CalSpec cal;
+    if(!TaskParseSchedule(entry->schedule, &schedule, &intervalNs, &cal))
+    {
+        LogF("static task %s/%s: invalid schedule", entry->schedule, entry->name);
+        return false;
+    }
+
+    char dirPath[CFG_PATH_MAX];
+    if(!PathJoinOk(dirPath, sizeof(dirPath), CFG_TASK_DIR, entry->schedule))
+    {
+        LogF("static task %s/%s: schedule path too long",
+             entry->schedule, entry->name);
+        return false;
+    }
+
+    return TaskBuildSpec(st, t, dirPath, entry->name, schedule, intervalNs,
+                         cal, 0, nowNs);
+}
+
+#endif
+
 static Task *TaskFindPath(InitState *st, const char *path)
 {
     for(usize i = 0; i < st->taskCount; i++)
@@ -3787,6 +3825,33 @@ static void TaskInstallSpec(Task *dst, const Task *spec)
     dst->bPresent = true;
     dst->bSeen = true;
 }
+
+#if FEATURE_STATIC_TASKS
+
+static void TaskLoadStatic(InitState *st)
+{
+    u64 nowNs = SysBootNs();
+    for(usize i = 0; STATIC_TASKS[i].name != NULL; i++)
+    {
+        Task spec;
+        if(!TaskBuildStaticSpec(st, &spec, &STATIC_TASKS[i], nowNs))
+            continue;
+        if(TaskFindPath(st, spec.path) != NULL)
+        {
+            LogF("static task %s: duplicate path, skipped", spec.path);
+            continue;
+        }
+        if(st->taskCount == CFG_MAX_TASKS)
+        {
+            LogF("static task table full, skipped %s", spec.path);
+            break;
+        }
+        TaskInstallSpec(&st->task[st->taskCount++], &spec);
+    }
+    LogF("%zu tasks in %s", st->taskCount, CFG_TASK_DIR);
+}
+
+#endif
 
 static bool TaskReconcileCandidate(InitState *st, const Task *spec, u64 nowNs)
 {
@@ -6491,7 +6556,11 @@ void InitMain(void)
 #if FEATURE_TASK_DISCOVERY
     TaskWatchOpen(st);
 #endif
+#if FEATURE_STATIC_TASKS
+    TaskLoadStatic(st);
+#else
     TaskScanAll(st);
+#endif
 
     st->sntpNextNs = SysBootNs();
 

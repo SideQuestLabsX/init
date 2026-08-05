@@ -143,6 +143,11 @@ case "$FEATURE_VARIANT" in
         reject_trace 'inotify_add_watch('
         reject_trace 'inotify_rm_watch('
         ;;
+    FEATURE_STATIC_TASKS=1)
+        reject_trace 'inotify_init1('
+        reject_trace 'inotify_add_watch('
+        reject_trace 'inotify_rm_watch('
+        ;;
     FEATURE_PERSIST_SCHEDULE=1)
         state="$stage/var/lib/init.schedule"
         if [ ! -f "$state" ]; then

@@ -20,11 +20,26 @@
 #ifndef FEATURE_PERSIST_SCHEDULE
   #define FEATURE_PERSIST_SCHEDULE 0
 #endif
+#ifndef FEATURE_STATIC_TASKS
+  #define FEATURE_STATIC_TASKS 0
+#endif
 #ifndef FEATURE_TASK_DISCOVERY
   #define FEATURE_TASK_DISCOVERY 1
 #endif
+#if FEATURE_STATIC_TASKS
+  #undef FEATURE_TASK_DISCOVERY
+  #define FEATURE_TASK_DISCOVERY 0
+#endif
 #ifndef OFFLINE_MODE
   #define OFFLINE_MODE 0
+#endif
+
+#if FEATURE_STATIC_TASKS
+typedef struct
+{
+    const char *schedule;
+    const char *name;
+} StaticTaskSpec;
 #endif
 
 /* paths */
@@ -210,6 +225,13 @@ _Static_assert(LOGP_IS_ROUTE(CFG_STDOUT_POLICY),
                "CFG_STDOUT_POLICY must be a concrete LOGP_ route");
 _Static_assert(LOGP_IS_ROUTE(CFG_STDERR_POLICY),
                "CFG_STDERR_POLICY must be a concrete LOGP_ route");
+
+#if FEATURE_STATIC_TASKS
+#ifndef INIT_STATIC_TASKS_H
+  #error "FEATURE_STATIC_TASKS requires INIT_STATIC_TASKS_H"
+#endif
+#include INIT_STATIC_TASKS_H
+#endif
 
 /* task overrides */
 

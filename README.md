@@ -72,8 +72,10 @@ state diagnostics and does not require task cooperation.
 Edit [`config.h`](config.h) and rebuild. It contains feature switches, paths,
 limits, timing, output routes, the fixed timezone offset, SNTP settings, the
 schedule state paths and the per-task rules table. There is no runtime
-configuration file. `PIE=0` is the only make-time configuration switch outside
-the header.
+configuration file. Immutable images can define `FEATURE_STATIC_TASKS=1` and
+provide `INIT_STATIC_TASKS_H` with a NULL-terminated `STATIC_TASKS` table. This
+loads only the compiled task list and disables runtime discovery. `PIE=0` is the
+only make-time configuration switch outside the header.
 
 ## Build
 
