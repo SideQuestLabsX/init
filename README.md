@@ -104,6 +104,8 @@ make check-all
 | `make test-ns` | The binary as PID 1 in user, PID and mount namespaces | `unshare`, unprivileged user namespaces |
 | `make test-qemu` | Base boot fixtures on a real kernel, including `devtmpfs` and `reboot(2)` | QEMU and a kernel image |
 | `make test-qemu-watchdog` | Hardware watchdog arm, keepalive, withheld pets and reset | x86_64 QEMU and a pinned kernel |
+| `make test-faults` | Syscall failure injection against a namespace boot | `unshare`, `timeout`, `strace`, unprivileged user namespaces |
+| `make test-variant FEATURE_VARIANT=...` | One feature build with behavior markers and syscall checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
 | `make abi-check ARCH=...` | Hand-transcribed syscall and ABI constants against UAPI headers | Target kernel headers |
 
 Runtime harnesses report a skip when namespace, QEMU or kernel prerequisites are
@@ -113,9 +115,9 @@ and ABI-checks installed cross-toolchains, then runs feature variants.
 On Windows, `tools/test.ps1` runs host tests, an x86_64 build and namespace tests
 through WSL. Without WSL, it runs native host tests.
 
-CI builds and ABI-checks all nine targets. It also runs architecture-specific QEMU
-boot tests with pinned kernels for every target and a real x86_64 watchdog reset
-test.
+CI builds and ABI-checks all nine targets and runs a QEMU boot test for each
+against a pinned Linux 6.1.75 kernel it builds from source. A separate job builds
+its own pinned x86_64 kernel for a real hardware watchdog reset test.
 
 ## Watchdog and shutdown
 

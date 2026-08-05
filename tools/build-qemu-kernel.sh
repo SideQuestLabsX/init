@@ -30,6 +30,13 @@ case "$ARCH" in
         BUILD_TARGETS=bzImage
         KERNEL_FILE="$KERNEL_ROOT/linux-$KERNEL_VERSION/arch/x86/boot/bzImage"
         ;;
+    aarch64)
+        KERNEL_ARCH=arm64
+        CROSS_COMPILE=aarch64-linux-gnu-
+        DEFCONFIG=defconfig
+        BUILD_TARGETS=Image
+        KERNEL_FILE="$KERNEL_ROOT/linux-$KERNEL_VERSION/arch/arm64/boot/Image"
+        ;;
     armv6)
         KERNEL_ARCH=arm
         CROSS_COMPILE=arm-linux-gnueabihf-

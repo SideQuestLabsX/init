@@ -131,19 +131,6 @@ jobs:
         if: matrix.tier == 'caps'
         run: make test-faults ARCH=x86_64 CC=gcc-14
 
-  boot-qemu:
-    name: qemu boot test (x86_64)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install qemu and a kernel
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 qemu-system-x86 linux-image-virtual
-          sudo chmod +r /boot/vmlinuz-* || true
-      - name: run
-        run: make test-qemu ARCH=x86_64 CC=gcc-14
-
   boot-qemu-watchdog:
     name: qemu hardware watchdog reset
     runs-on: ubuntu-24.04
@@ -163,47 +150,6 @@ jobs:
         env:
           TIMEOUT: 30
 
-  boot-qemu-aarch64:
-    name: qemu boot test (aarch64)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: add the arm64 package archive
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo sed -i '/^Architectures:/d; /^Components:/a Architectures: amd64' \
-            /etc/apt/sources.list.d/ubuntu.sources
-          . /etc/os-release
-          sudo tee /etc/apt/sources.list.d/ubuntu-ports.sources >/dev/null <<EOF
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports
-          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
-          Components: main
-          Architectures: arm64
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF
-      - name: install qemu, the compiler and an arm64 kernel
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-arm gcc-14-aarch64-linux-gnu
-          kernel_package=$(apt-cache depends linux-image-generic:arm64 | \
-            sed -n 's/.*Depends: \(linux-image-[^ :]*\).*/\1/p' | head -n 1)
-          test -n "$kernel_package"
-          mkdir -p "$RUNNER_TEMP/arm64-kernel"
-          cd "$RUNNER_TEMP/arm64-kernel"
-          apt-get download "${kernel_package}:arm64"
-          package=$(find . -maxdepth 1 -name "${kernel_package}_*_arm64.deb" -print -quit)
-          test -n "$package"
-          dpkg-deb -x "$package" root
-          kernel=$(find root/boot -name 'vmlinuz-*' -print -quit)
-          test -n "$kernel"
-          echo "KERNEL=$PWD/$kernel" >> "$GITHUB_ENV"
-      # Aarch64 TCG needs a longer timeout than x86_64
-      - name: run
-        run: make test-qemu ARCH=aarch64 CC=aarch64-linux-gnu-gcc-14
-        env:
-          TIMEOUT: 300
-
   boot-qemu-mips:
     name: qemu boot test (mips)
     runs-on: ubuntu-24.04
@@ -222,16 +168,22 @@ jobs:
         env:
           TIMEOUT: 300
 
-  boot-qemu-ports:
+  boot-qemu:
     name: qemu boot test (${{ matrix.arch }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
+          - arch: x86_64
+            cc: gcc-14
+            packages: gcc-14 qemu-system-x86
           - arch: x86
             cc: gcc-14
             packages: gcc-14-multilib qemu-system-x86
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc-14
+            packages: gcc-aarch64-linux-gnu gcc-14-aarch64-linux-gnu qemu-system-arm
           - arch: armv6
             cc: arm-linux-gnueabihf-gcc-14
             packages: gcc-arm-linux-gnueabihf gcc-14-arm-linux-gnueabihf qemu-system-arm

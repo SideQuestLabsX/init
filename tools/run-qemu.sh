@@ -25,7 +25,10 @@ case "$ARCH" in
         QEMU=qemu-system-i386; MACHINE="-machine q35"; CONSOLE=ttyS0
         ;;
     x86_64) QEMU=qemu-system-x86_64; MACHINE="-machine q35"; CONSOLE=ttyS0 ;;
-    aarch64) QEMU=qemu-system-aarch64; MACHINE="-machine virt -cpu cortex-a57"; CONSOLE=ttyAMA0 ;;
+    aarch64)
+        QEMU=qemu-system-aarch64; MACHINE="-machine virt -cpu cortex-a57"; CONSOLE=ttyAMA0
+        TIMEOUT="${TIMEOUT:-300}"
+        ;;
     armv6)
         QEMU=qemu-system-arm; MACHINE="-machine realview-eb -cpu arm1136"; CONSOLE=ttyAMA0
         MARKER_ARCH=arm
