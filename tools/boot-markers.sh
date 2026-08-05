@@ -239,10 +239,7 @@ fi
 if [ "$MARKER_CAPTURE" -ne 0 ]; then
     expect "ok-stderr-line"
     expect "flap-dying"
-    expect "partial-stdout-line"
-    expect "LOGEDGE-HEAD"
-    expect "LOGEDGE-B1"
-    expect "LOGEDGE-B2"
+    expect "FIXTURE capture records verified"
     expect "LOGINTERLEAVE-B"
     expect "FIXTURE interleaved log verified"
 fi

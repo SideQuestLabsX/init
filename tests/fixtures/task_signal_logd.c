@@ -102,14 +102,101 @@ static bool LogContains(const char *needle)
     return false;
 }
 
+static usize LineFind(const char *line, const char *needle, usize start)
+{
+    usize lineLen = StrLen(line);
+    usize needleLen = StrLen(needle);
+    if(needleLen == 0 || start > lineLen || needleLen > lineLen - start)
+        return lineLen;
+
+    for(usize i = start; i + needleLen <= lineLen; i++)
+    {
+        if(StrNCmp(line + i, needle, needleLen) == 0)
+            return i;
+    }
+    return lineLen;
+}
+
+static bool LineEndsWith(const char *line, const char *suffix)
+{
+    usize lineLen = StrLen(line);
+    usize suffixLen = StrLen(suffix);
+    return lineLen >= suffixLen &&
+           StrNCmp(line + lineLen - suffixLen, suffix, suffixLen) == 0;
+}
+
+static bool LogLineMatches(const char *line, const char *first,
+                           const char *second, const char *third)
+{
+    usize lineLen = StrLen(line);
+    usize firstPos = LineFind(line, first, 0);
+    if(firstPos == lineLen)
+        return false;
+    if(second == NULL)
+        return LineEndsWith(line, first);
+
+    usize secondPos = LineFind(line, second, firstPos + StrLen(first));
+    if(secondPos == lineLen)
+        return false;
+    if(third == NULL)
+        return true;
+    return LineFind(line, third, secondPos + StrLen(second)) != lineLen;
+}
+
+static bool LogContainsRecord(const char *first, const char *second,
+                              const char *third)
+{
+    isize fd = SysOpen("/var/log/init.log", O_RDONLY | O_CLOEXEC, 0);
+    if(fd < 0)
+        return false;
+
+    char line[CFG_LINE_MAX * 2 + 512];
+    usize lineLen = 0;
+    bool bOverflow = false;
+    char buf[256];
+    for(;;)
+    {
+        isize n = SysRead((i32)fd, buf, sizeof(buf));
+        if(n <= 0)
+            break;
+        for(isize i = 0; i < n; i++)
+        {
+            if(buf[i] == '\n')
+            {
+                if(!bOverflow)
+                {
+                    if(lineLen > 0 && line[lineLen - 1] == '\r')
+                        lineLen--;
+                    line[lineLen] = '\0';
+                    if(LogLineMatches(line, first, second, third))
+                    {
+                        SysClose((i32)fd);
+                        return true;
+                    }
+                }
+                lineLen = 0;
+                bOverflow = false;
+            }
+            else if(!bOverflow)
+            {
+                if(lineLen + 1 < sizeof(line))
+                    line[lineLen++] = buf[i];
+                else
+                    bOverflow = true;
+            }
+        }
+    }
+
+    SysClose((i32)fd);
+    return false;
+}
+
 static bool LogMarkersReady(bool bWriterTransitions)
 {
     if(!LogContains("ok-stderr-line") ||
        !LogContains("flap-dying") ||
-       !LogContains("partial-stdout-line") ||
-       !LogContains("LOGEDGE-HEAD") ||
-       !LogContains("LOGEDGE-B1") ||
-       !LogContains("LOGEDGE-B2") ||
+       !LogContainsRecord("partial-stdout-line", NULL, NULL) ||
+       !LogContainsRecord("LOGEDGE-HEAD", "LOGEDGE-B1", "LOGEDGE-B2") ||
        !LogContains("LOGINTERLEAVE-A-BEGIN") ||
        !LogContains("LOGINTERLEAVE-A-END") ||
        !LogContains("LOGINTERLEAVE-B"))
@@ -138,7 +225,7 @@ static bool WaitForPartialLine(void)
 {
     for(usize attempt = 0; attempt < 12; attempt++)
     {
-        if(LogContains("partial-stdout-line"))
+        if(LogContainsRecord("partial-stdout-line", NULL, NULL))
             return true;
         FixtureSleep(250ull * NS_PER_MS);
     }
@@ -212,6 +299,7 @@ void FixtureMain(void)
         FixtureSay("FIXTURE final log markers missing");
         SysExit(1);
     }
+    FixtureSay("FIXTURE capture records verified");
 #endif
 
     if(!Touch("/var/log/logd-fixture-done"))
