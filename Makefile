@@ -53,6 +53,7 @@ endif
 ARCH_PIE ?= 1
 PIE ?= $(ARCH_PIE)
 ifeq ($(PIE),1)
+  COMPILE_MODE := -fPIE
   LINKMODE := -static-pie
   # Some ARM cross linkers retain PT_INTERP for -static-pie without this flag
   LINKER_PIE_FLAGS := -Wl,--no-dynamic-linker
@@ -61,6 +62,7 @@ ifeq ($(PIE),1)
     LINKER_PIE_FLAGS += -Wl,-z,notext
   endif
 else
+  COMPILE_MODE := -fno-pie
   LINKMODE := -static -no-pie
   LINKER_PIE_FLAGS :=
 endif
@@ -102,7 +104,7 @@ ifeq ($(WATCHDOG_TEST),1)
                  -DOFFLINE_MODE=1
 endif
 
-CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS) \
+CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(COMPILE_MODE) $(EXTRA_CFLAGS) \
            $(WARN_CFLAGS) \
            $(BOOT_CFLAGS) $(BOOT_RULES)
 
@@ -117,7 +119,7 @@ OBJ := $(BUILD)/init.o $(BUILD)/start.o
 all: $(TARGET)
 
 $(TARGET): $(OBJ) | $(BUILD)
-	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS_ARCH) $(OBJ) -o $@ $(LDFLAGS)
 	@echo "built $@"
 
 $(BUILD)/%.o: %.c $(CONFIG_DEPS) | $(BUILD)
@@ -179,11 +181,11 @@ abi-check: | $(BUILD)
 
 FIXTURE_SRC := $(wildcard tests/fixtures/*.c)
 FIXTURE_BIN := $(patsubst tests/fixtures/%.c,$(BUILD)/fixtures/%,$(FIXTURE_SRC))
-FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -static -no-pie \
+FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -fno-pie \
                   -fno-stack-protector -fno-builtin -fno-common \
                   -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH) \
                   $(FIXTURE_EXTRA_CFLAGS) $(WARN_CFLAGS)
-FIXTURE_LDFLAGS := -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
+FIXTURE_LDFLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start -Wl,-z,noexecstack
 # The pinned arm64 kernel uses 4 KiB pages
 ifeq ($(ARCH),aarch64)
   FIXTURE_LDFLAGS += -Wl,-z,max-page-size=0x1000
@@ -198,7 +200,7 @@ $(BUILD)/fixtures/%: tests/fixtures/%.c tests/fixtures/fstart.S \
 	      $(FIXTURE_LDFLAGS) -lgcc
 
 STATUS_READER := $(BUILD)/init-status
-STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
+STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -fno-pie \
                          -fno-stack-protector -fno-builtin -fno-common \
                          -Wall -Wextra -I. -DINIT_FIXTURE=1 \
                          -DINIT_STATUS_READER=1 -DFIXTURE_ENTRY=StatusReaderMain \
@@ -210,7 +212,7 @@ status-reader: $(STATUS_READER)
 $(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c armv6-div.S \
                   $(CONFIG_DEPS) | $(BUILD)
 	$(CC) $(STATUS_READER_CFLAGS) tools/init-status.c tests/fixtures/fstart.S \
-	      -o $@ -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
+	      -o $@ -nostdlib -static -Wl,-no-pie -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 QEMU_BUILD ?= build/$(ARCH)-qemu
 WATCHDOG_QEMU_BUILD ?= build/$(ARCH)-watchdog-qemu

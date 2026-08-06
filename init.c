@@ -2705,8 +2705,10 @@ static inline isize SysLseek(i32 fd, i64 off, i32 whence)
 static inline isize SysFtruncate(i32 fd, i64 len)
 { return SysCall2(SYS_ftruncate, fd, (isize)len); }
 
+#if FEATURE_PERSIST_SCHEDULE && !OFFLINE_MODE
 static inline isize SysFsync(i32 fd)
 { return SysCall1(SYS_fsync, fd); }
+#endif
 
 static inline isize SysMkdir(const char *path, i32 mode)
 { return SysCall3(SYS_mkdirat, AT_FDCWD, (isize)path, mode); }
@@ -2744,9 +2746,6 @@ static inline isize SysInotifyAddWatch(i32 fd, const char *path, u32 mask)
 static inline isize SysInotifyRmWatch(i32 fd, i32 wd)
 { return SysCall2(SYS_inotify_rm_watch, fd, wd); }
 
-static inline isize SysChdir(const char *path)
-{ return SysCall1(SYS_chdir, (isize)path); }
-
 static inline isize SysUmask(i32 mask)
 { return SysCall1(SYS_umask, mask); }
 
@@ -2773,15 +2772,14 @@ static inline void *SysMmap(void *addr, usize len, i32 prot, i32 flags, i32 fd, 
     return (void *)r;
 }
 
+#ifdef INIT_FIXTURE
 static inline isize SysMunmap(void *addr, usize len)
 { return SysCall2(SYS_munmap, (isize)addr, (isize)len); }
+#endif
 
 static inline isize SysMount(const char *src, const char *tgt, const char *fs,
                              u32 flags, const void *data)
 { return SysCall5(SYS_mount, (isize)src, (isize)tgt, (isize)fs, (isize)(usize)flags, (isize)data); }
-
-static inline isize SysUmount2(const char *tgt, i32 flags)
-{ return SysCall2(SYS_umount2, (isize)tgt, flags); }
 
 static inline isize SysSync(void)
 { return SysCall0(SYS_sync); }
