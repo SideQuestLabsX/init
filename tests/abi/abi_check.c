@@ -1,15 +1,19 @@
 /* SOCK_DGRAM is absent from installed UAPI headers, MIPS runtime coverage is open */
 
 #include <stddef.h>
+#include <sys/socket.h>
 #include <asm/unistd.h>
 #include <asm/errno.h>
 #include <linux/fcntl.h>
 #include <linux/capability.h>
 #include <linux/inotify.h>
+#include <linux/netlink.h>
 #include <linux/mount.h>
 #include <linux/mman.h>
 #include <linux/prctl.h>
 #include <linux/reboot.h>
+#include <linux/rtnetlink.h>
+#include <linux/socket.h>
 #include <linux/stat.h>
 #include <linux/time.h>
 #include <linux/watchdog.h>
@@ -95,6 +99,24 @@ enum
     K_INOTIFY_MASK_OFFSET = offsetof(struct inotify_event, mask),
     K_INOTIFY_COOKIE_OFFSET = offsetof(struct inotify_event, cookie),
     K_INOTIFY_LEN_OFFSET = offsetof(struct inotify_event, len),
+    K_AF_NETLINK = AF_NETLINK,
+    K_SOCK_RAW = SOCK_RAW,
+    K_NETLINK_ROUTE = NETLINK_ROUTE,
+    K_RTMGRP_LINK = RTMGRP_LINK,
+    K_RTMGRP_IPV4_IFADDR = RTMGRP_IPV4_IFADDR,
+    K_RTMGRP_IPV6_IFADDR = RTMGRP_IPV6_IFADDR,
+    K_RTM_NEWLINK = RTM_NEWLINK,
+    K_RTM_DELLINK = RTM_DELLINK,
+    K_RTM_NEWADDR = RTM_NEWADDR,
+    K_RTM_DELADDR = RTM_DELADDR,
+    K_NLMSG_ALIGNTO = NLMSG_ALIGNTO,
+    K_NLMSG_HDRLEN = NLMSG_HDRLEN,
+    K_SOCKADDR_NL_SIZE = sizeof(struct sockaddr_nl),
+    K_SOCKADDR_NL_FAMILY_OFFSET = offsetof(struct sockaddr_nl, nl_family),
+    K_SOCKADDR_NL_PID_OFFSET = offsetof(struct sockaddr_nl, nl_pid),
+    K_SOCKADDR_NL_GROUPS_OFFSET = offsetof(struct sockaddr_nl, nl_groups),
+    K_NLMSG_HDR_SIZE = sizeof(struct nlmsghdr),
+    K_NLMSG_HDR_TYPE_OFFSET = offsetof(struct nlmsghdr, nlmsg_type),
     K_STATX_SIZE_MASK = STATX_SIZE,
     K_STATX_MTIME_MASK = STATX_MTIME,
     K_STATX_CTIME_MASK = STATX_CTIME,
@@ -158,6 +180,22 @@ enum
 #undef O_RDONLY
 #undef O_WRONLY
 #undef O_RDWR
+#undef AF_INET
+#undef AF_NETLINK
+#undef SOCK_DGRAM
+#undef SOCK_RAW
+#undef SOCK_NONBLOCK
+#undef SOCK_CLOEXEC
+#undef NETLINK_ROUTE
+#undef RTMGRP_LINK
+#undef RTMGRP_IPV4_IFADDR
+#undef RTMGRP_IPV6_IFADDR
+#undef RTM_NEWLINK
+#undef RTM_DELLINK
+#undef RTM_NEWADDR
+#undef RTM_DELADDR
+#undef NLMSG_ALIGNTO
+#undef NLMSG_HDRLEN
 #undef AT_FDCWD
 #undef AT_STATX_SYNC_AS_STAT
 #undef STATX_MTIME
@@ -451,6 +489,25 @@ SAME(IN_Q_OVERFLOW, K_IN_Q_OVERFLOW);
 SAME(IN_IGNORED, K_IN_IGNORED);
 SAME(IN_ONLYDIR, K_IN_ONLYDIR);
 SAME(IN_ISDIR, K_IN_ISDIR);
+
+SAME(AF_NETLINK, K_AF_NETLINK);
+SAME(SOCK_RAW, K_SOCK_RAW);
+SAME(NETLINK_ROUTE, K_NETLINK_ROUTE);
+SAME(RTMGRP_LINK, K_RTMGRP_LINK);
+SAME(RTMGRP_IPV4_IFADDR, K_RTMGRP_IPV4_IFADDR);
+SAME(RTMGRP_IPV6_IFADDR, K_RTMGRP_IPV6_IFADDR);
+SAME(RTM_NEWLINK, K_RTM_NEWLINK);
+SAME(RTM_DELLINK, K_RTM_DELLINK);
+SAME(RTM_NEWADDR, K_RTM_NEWADDR);
+SAME(RTM_DELADDR, K_RTM_DELADDR);
+SAME(NLMSG_ALIGNTO, K_NLMSG_ALIGNTO);
+SAME(NLMSG_HDRLEN, K_NLMSG_HDRLEN);
+SAME(sizeof(KSockAddrNl), K_SOCKADDR_NL_SIZE);
+SAME(offsetof(KSockAddrNl, family), K_SOCKADDR_NL_FAMILY_OFFSET);
+SAME(offsetof(KSockAddrNl, pid), K_SOCKADDR_NL_PID_OFFSET);
+SAME(offsetof(KSockAddrNl, groups), K_SOCKADDR_NL_GROUPS_OFFSET);
+SAME(sizeof(KNlMsgHdr), K_NLMSG_HDR_SIZE);
+SAME(offsetof(KNlMsgHdr, type), K_NLMSG_HDR_TYPE_OFFSET);
 
 /* These constants exceed enum width on 32-bit targets */
 int AbiCheckWide(void);

@@ -105,7 +105,7 @@ LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_s
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-config-overrides test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
+.PHONY: all clean check check-all test test-config-overrides test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -129,6 +129,7 @@ $(BUILD):
 
 # INIT_HOSTED excludes syscall code for native sanitizer tests
 HOST_CC    ?= cc
+PYTHON     ?= python3
 HOST_BUILD := build/host
 HOST_SRC   := tests/host/test_main.c
 HOST_DEPS  := tests/host/test_main.c init.c $(CONFIG_DEPS)
@@ -141,8 +142,11 @@ ifeq ($(SANITIZE),1)
   HOST_CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 endif
 
-test: test-config-overrides $(HOST_BUILD)/unit
+test: test-config-overrides test-log-reader $(HOST_BUILD)/unit
 	@$(HOST_BUILD)/unit
+
+test-log-reader:
+	$(PYTHON) tools/test-log-read.py
 
 test-config-overrides: | $(HOST_BUILD)
 	$(HOST_CC) -std=c11 -I. -Werror -c tests/host/config_override.c \
@@ -227,6 +231,8 @@ test-ns:
 	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_STATUS_READER=1 \
 	        INIT_TASK_DISCOVERY_TEST=1 \
 	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
+	ARCH=$(ARCH) INIT_NS_TIER=$(INIT_NS_TIER) INIT_NETLINK_TEST=1 \
+	        sh tools/run-namespace.sh "$(NS_BUILD)" "$(NS_ROOTFS)"
 
 test-faults:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 all fixtures
@@ -242,7 +248,8 @@ check:
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
                     FEATURE_LOG_DISK=0 FEATURE_LOG_CAPTURE=0 \
                     FEATURE_CAPABILITY_DROP=0 FEATURE_TASK_DISCOVERY=0 \
-                    FEATURE_PERSIST_SCHEDULE=1 FEATURE_STATIC_TASKS=1
+                    FEATURE_PERSIST_SCHEDULE=1 FEATURE_STATIC_TASKS=1 \
+                    FEATURE_NETLINK_EVENTS=0 FEATURE_LOG_COMPRESSION=1
 
 CC_x86_64      ?= gcc
 CC_x86         ?= gcc
@@ -288,6 +295,9 @@ test-variant:
 	fi; \
 	if [ "$$v" = FEATURE_LOG_CAPTURE=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1"; \
+	fi; \
+	if [ "$$v" = FEATURE_LOG_COMPRESSION=1 ]; then \
+		fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1 -DFIXTURE_LOG_FORMAT_DISABLED=1"; \
 	fi; \
 	if [ "$$v" = FEATURE_LOG_DISK=0 ]; then \
 		fixture_extra="$$fixture_extra -DFIXTURE_LOG_DISK_DISABLED=1"; \

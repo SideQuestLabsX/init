@@ -20,6 +20,8 @@ static const TaskRule TASK_RULES[] =
 
     { .name = "signal_logd", .outPolicy = LOGP_BOTH },
 
+    { .name = "netlink_controller", .capMask = CAP_BIT(12) },
+
     /* Probe timeouts must count toward restart failure */
     { .name = "hangcheck",
       .graceNs = 100ull * NS_PER_MS,

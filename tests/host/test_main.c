@@ -312,6 +312,52 @@ static void TestDiscovery(void)
     CHECK(!TaskWatchEventValid(event, sizeof(KInotifyEvent) + 3, NULL));
 }
 
+static void TestNetlink(void)
+{
+    GROUP("netlink");
+
+    u8 raw[64] __attribute__((aligned(8)));
+    u32 mask = 0;
+    memset(raw, 0, sizeof(raw));
+    CHECK(!NetlinkEventMask(raw, 0, &mask));
+
+    KNlMsgHdr *header = (KNlMsgHdr *)raw;
+    header->length = NLMSG_HDRLEN;
+    header->type = RTM_NEWLINK;
+    CHECK(NetlinkEventMask(raw, NLMSG_HDRLEN, &mask) &&
+          mask == NETLINK_EVENT_LINK);
+
+    header->length = NLMSG_HDRLEN - 1u;
+    CHECK(!NetlinkEventMask(raw, NLMSG_HDRLEN, &mask));
+    header->length = NLMSG_HDRLEN + 1u;
+    CHECK(!NetlinkEventMask(raw, NLMSG_HDRLEN + 1u, &mask));
+
+    memset(raw, 0, sizeof(raw));
+    header = (KNlMsgHdr *)raw;
+    header->length = NLMSG_HDRLEN + 1u;
+    header->type = RTM_DELLINK;
+    KNlMsgHdr *second = (KNlMsgHdr *)(raw + 20);
+    second->length = NLMSG_HDRLEN;
+    second->type = RTM_NEWADDR;
+    CHECK(NetlinkEventMask(raw, 36, &mask) &&
+          mask == (NETLINK_EVENT_LINK | NETLINK_EVENT_ADDRESS));
+
+    memset(raw, 0, sizeof(raw));
+    header = (KNlMsgHdr *)raw;
+    header->length = NLMSG_HDRLEN;
+    header->type = 0;
+    CHECK(NetlinkEventMask(raw, NLMSG_HDRLEN, &mask) && mask == 0);
+    header->length = NLMSG_HDRLEN + 4u;
+    CHECK(!NetlinkEventMask(raw, NLMSG_HDRLEN, &mask));
+
+    u32 event = 0;
+    CHECK(ParseEventSchedule("event-link", &event) &&
+          event == NETLINK_EVENT_LINK);
+    CHECK(ParseEventSchedule("event-address", &event) &&
+          event == NETLINK_EVENT_ADDRESS);
+    CHECK(!ParseEventSchedule("event", &event));
+}
+
 static void TestProbeTimeout(void)
 {
     GROUP("probes");
@@ -610,6 +656,86 @@ static void TestRing(void)
 #endif
 }
 
+static bool TestLz4Length(const u8 *src, usize len, usize *pos,
+                          usize base, usize *length)
+{
+    *length = base;
+    if(base != 15)
+        return true;
+    for(;;)
+    {
+        if(*pos >= len)
+            return false;
+        u8 value = src[(*pos)++];
+        *length += value;
+        if(value != 255)
+            return true;
+    }
+}
+
+static bool TestLz4Decode(const u8 *src, usize len, u8 *out, usize cap,
+                          usize *outLen)
+{
+    usize pos = 0;
+    usize outAt = 0;
+    while(pos < len)
+    {
+        u8 token = src[pos++];
+        usize literalLen = 0;
+        if(!TestLz4Length(src, len, &pos, token >> 4, &literalLen) ||
+           literalLen > len - pos || literalLen > cap - outAt)
+            return false;
+        memcpy(out + outAt, src + pos, literalLen);
+        pos += literalLen;
+        outAt += literalLen;
+        if(pos == len)
+            break;
+        if(len - pos < 2)
+            return false;
+        usize offset = (usize)src[pos] | ((usize)src[pos + 1] << 8);
+        pos += 2;
+        if(offset == 0 || offset > outAt)
+            return false;
+        usize matchCode = 0;
+        if(!TestLz4Length(src, len, &pos, token & 0x0f, &matchCode))
+            return false;
+        usize matchLen = matchCode + 4;
+        if(matchLen > cap - outAt)
+            return false;
+        for(usize i = 0; i < matchLen; i++)
+        {
+            out[outAt] = out[outAt - offset];
+            outAt++;
+        }
+    }
+    *outLen = outAt;
+    return true;
+}
+
+static void TestCompression(void)
+{
+    GROUP("compression");
+
+    u8 source[512];
+    const char pattern[] = "event-address changed interface state and flushed\n";
+    usize patternLen = sizeof(pattern) - 1;
+    for(usize i = 0; i < sizeof(source); i++)
+        source[i] = (u8)pattern[i % patternLen];
+
+    u8 encoded[LOGD_FRAME_BUF_BYTES];
+    u32 hash[LOGD_LZ4_HASH_SIZE];
+    usize encodedLen = 0;
+    CHECK(LogdLz4Encode(source, sizeof(source), encoded, sizeof(encoded),
+                        hash, &encodedLen));
+    CHECK(encodedLen < sizeof(source));
+
+    u8 decoded[sizeof(source)];
+    usize decodedLen = 0;
+    CHECK(TestLz4Decode(encoded, encodedLen, decoded, sizeof(decoded),
+                        &decodedLen));
+    CHECK(decodedLen == sizeof(source) && memcmp(decoded, source, sizeof(source)) == 0);
+}
+
 static void TestStatus(void)
 {
     GROUP("status");
@@ -886,9 +1012,11 @@ int main(void)
     TestNumbers();
     TestNames();
     TestDiscovery();
+    TestNetlink();
     TestProbeTimeout();
     TestArena();
     TestRing();
+    TestCompression();
     TestStatus();
     TestRules();
     TestSchedules();

@@ -80,7 +80,7 @@ reject_trace()
 
 case "$FEATURE_VARIANT" in
     OFFLINE_MODE=1)
-        reject_trace 'socket('
+        reject_trace 'socket(AF_INET'
         ;;
     FEATURE_WATCHDOG=0)
         reject_trace 'openat(AT_FDCWD, "/dev/watchdog"'
@@ -123,6 +123,22 @@ case "$FEATURE_VARIANT" in
         fi
         echo "ok: FEATURE_LOG_CAPTURE=0 captured no task stderr"
         ;;
+    FEATURE_LOG_COMPRESSION=1)
+        log="$stage/var/log/init.log"
+        extracted="$stage/var/log/init.log.extracted"
+        if ! python3 tools/init-log-read.py verify "$log"; then
+            echo "BAD: FEATURE_LOG_COMPRESSION=1 produced an invalid framed log"
+            exit 1
+        fi
+        python3 tools/init-log-read.py extract -o "$extracted" "$log"
+        if ! grep -qF 'legacy-before-compression' "$extracted" ||
+           ! grep -qF 'init: log writer pid' "$extracted" ||
+           ! grep -qF 'init: subsecond: started' "$extracted"; then
+            echo "BAD: FEATURE_LOG_COMPRESSION=1 extraction lost log records"
+            exit 1
+        fi
+        echo "ok: FEATURE_LOG_COMPRESSION=1 produced a readable framed log"
+        ;;
     FEATURE_CAPABILITY_DROP=0)
         if grep -qF 'capset(' "$trace"; then
             echo "BAD: FEATURE_CAPABILITY_DROP=0 issued capset in a child"
@@ -147,6 +163,9 @@ case "$FEATURE_VARIANT" in
         reject_trace 'inotify_init1('
         reject_trace 'inotify_add_watch('
         reject_trace 'inotify_rm_watch('
+        ;;
+    FEATURE_NETLINK_EVENTS=0)
+        reject_trace 'socket(AF_NETLINK'
         ;;
     FEATURE_PERSIST_SCHEDULE=1)
         state="$stage/var/lib/init.schedule"

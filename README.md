@@ -16,6 +16,8 @@ kernel with `rdinit=/bin/init`. Put executable tasks under
 /tasks/24h/rotate_logs
 /tasks/1d-03-30/backup
 /tasks/sun-04-00/deepclean
+/tasks/event-link/link_state
+/tasks/event-address/address_state
 ```
 
 Tasks start concurrently. Names are sorted byte-wise to select a deterministic
@@ -37,12 +39,18 @@ The directory below `/tasks/` defines the schedule:
 | `500ms`, `30s`, `5m`, `24h`, `7d` | Run at that interval from boot, up to 366 days; bare digits mean seconds |
 | `<N>d-HH-MM` | Run every N days at that wall-clock time |
 | `sun-HH-MM` through `sat-HH-MM` | Run at that time on the named weekday |
+| `event-link` | Run on link add or remove notifications |
+| `event-address` | Run on IPv4 or IPv6 address add or remove notifications |
 
 Intervals use boot time and keep their phase until reboot. When
 `FEATURE_PERSIST_SCHEDULE` is enabled, successful interval runs are recorded on
 the persistent state path and reused after the next successful SNTP sync.
 Calendar schedules use `CFG_TZ_OFFSET_SEC`, with no DST handling. Missed slots
 and overruns are skipped rather than queued.
+
+Event schedules wait for their matching netlink notification, coalesce repeated
+notifications and do not respawn after a run exits. Notifications received while
+the task is active are skipped.
 
 A machine without a working RTC schedules calendar tasks against its current
 clock. They may run early and are re-dated after the first successful SNTP sync.
@@ -138,6 +146,14 @@ A forked `init-logd` child performs batched disk writes, so PID 1 does not block
 on storage. With the shipped defaults, stderr is persisted while stdout is
 captured and discarded after transport. Per-task rules can select `drop`,
 `ring`, `disk` or `ring+disk` for either stream.
+
+Set `FEATURE_LOG_COMPRESSION=1` to write checksummed LZ4-framed batches. The
+dependency-free host reader validates or extracts them:
+
+```sh
+python3 tools/init-log-read.py verify /var/log/init.log
+python3 tools/init-log-read.py extract -o init.log.txt /var/log/init.log
+```
 
 ## Status
 

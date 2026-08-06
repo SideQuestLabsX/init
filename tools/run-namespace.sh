@@ -98,10 +98,11 @@ status_reader=${INIT_STATUS_READER:-0}
 status_fallback=${INIT_STATUS_FALLBACK:-0}
 remount_test=${INIT_NS_REMOUNT_TEST:-0}
 discovery_test=${INIT_TASK_DISCOVERY_TEST:-0}
+netlink_test=${INIT_NETLINK_TEST:-0}
 
 unset MARKER_LOGD MARKER_NS_TIER MARKER_CHILD_ERROR MARKER_PROBES \
       MARKER_LOGFILE MARKER_CAPTURE MARKER_SNTP MARKER_STATUS \
-      MARKER_STATUS_FALLBACK MARKER_DISCOVERY MARKER_NAMESPACE \
+      MARKER_STATUS_FALLBACK MARKER_DISCOVERY MARKER_NETLINK MARKER_NAMESPACE \
       MARKER_SNTP_CLOCK_SET EXPECT_TASKS
 
 case "${FEATURE_VARIANT:-}" in
@@ -124,9 +125,11 @@ INIT_LOG_SYMLINK=$log_symlink \
 INIT_STATUS_READER=$status_reader \
 INIT_STATUS_FALLBACK=$status_fallback \
 INIT_TASK_DISCOVERY_TEST=$discovery_test \
+INIT_NETLINK_TEST=$netlink_test \
 sh "$ROOTFS_STAGE" "$BUILD" "$STAGE"
 
-task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + 3 * discovery_test))
+task_count=$((20 + sntp_fixture + logd_fixture + status_reader + 2 * privilege_fixtures + \
+             3 * discovery_test + 3 * netlink_test))
 EXPECT_TASKS=$task_count
 if [ "$privilege_fixtures" -ne 0 ]; then
     MARKER_NS_TIER=$ns_tier
@@ -139,6 +142,23 @@ if [ "$status_fallback" -ne 0 ]; then
 fi
 if [ "$discovery_test" -ne 0 ]; then
     MARKER_DISCOVERY=1
+fi
+if [ "$netlink_test" -ne 0 ]; then
+    MARKER_NETLINK=1
+fi
+if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ]; then
+    MARKER_CAPTURE=0
+    MARKER_CHILD_ERROR=0
+fi
+
+if [ "$netlink_test" -ne 0 ]; then
+    if [ "$ns_tier" = auto ]; then
+        unshare --map-auto --map-root-user --net true 2>/dev/null || \
+            unavailable "network namespaces are unavailable"
+    else
+        unshare --user --map-root-user --net true 2>/dev/null || \
+            unavailable "network namespaces are unavailable"
+    fi
 fi
 
 # User namespaces cannot mount devtmpfs
@@ -153,6 +173,10 @@ if [ "$ns_tier" = caps ]; then
     echo "namespace tier caps: uid and gid assertions unavailable"
 fi
 echo "booting $BUILD/init as namespace PID 1"
+net_args=
+if [ "$netlink_test" -ne 0 ]; then
+    net_args=--net
+fi
 set +e
 if [ "$remount_test" -ne 0 ]; then
     if ! command -v strace >/dev/null 2>&1; then
@@ -175,9 +199,11 @@ if [ "$remount_test" -ne 0 ]; then
     fi
 elif [ "$ns_tier" = auto ]; then
     timeout "$TIMEOUT" unshare --map-auto --map-root-user --mount --pid --fork \
+        $net_args \
         chroot "$STAGE" /init > "$LOG" 2>&1
 else
     timeout "$TIMEOUT" unshare --user --map-root-user --mount --pid --fork \
+        $net_args \
         chroot "$STAGE" /init > "$LOG" 2>&1
 fi
 RC=$?

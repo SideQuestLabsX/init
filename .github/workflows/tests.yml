@@ -91,6 +91,7 @@ jobs:
           - FEATURE_LOG_CAPTURE=0
           - FEATURE_CAPABILITY_DROP=0
           - FEATURE_TASK_DISCOVERY=0
+          - FEATURE_NETLINK_EVENTS=0
           - FEATURE_PERSIST_SCHEDULE=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

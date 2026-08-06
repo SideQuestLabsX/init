@@ -8,6 +8,7 @@ MARKER_SNTP="${MARKER_SNTP:-1}"
 MARKER_STATUS="${MARKER_STATUS:-0}"
 MARKER_STATUS_FALLBACK="${MARKER_STATUS_FALLBACK:-0}"
 MARKER_DISCOVERY="${MARKER_DISCOVERY:-0}"
+MARKER_NETLINK="${MARKER_NETLINK:-0}"
 
 expect_once()
 {
@@ -181,6 +182,13 @@ if [ "$MARKER_DISCOVERY" -ne 0 ]; then
                  "FIXTURE discovery replacement complete"
     reject "FIXTURE discovery failed:"
     reject "FIXTURE discovery completion incomplete"
+fi
+
+if [ "$MARKER_NETLINK" -ne 0 ]; then
+    expect "FIXTURE netlink link sent"
+    expect "FIXTURE netlink address sent"
+    expect_once "FIXTURE netlink link task ran"
+    expect_once "FIXTURE netlink address task ran"
 fi
 
 if [ "$MARKER_LOGD" -ne 0 ]; then

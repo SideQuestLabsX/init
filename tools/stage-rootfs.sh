@@ -15,6 +15,14 @@ mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/run" "$STAGE/sys" "$STAGE/var/log" "
          "$STAGE/tasks/2s" "$STAGE/tasks/500ms" "$STAGE/tasks/1h" "$STAGE/tasks/3d" \
          "$STAGE/tasks/1d-03-30" "$STAGE/tasks/4d-03-30" "$STAGE/tasks/sun-04-00"
 
+case "${FEATURE_VARIANT:-}" in
+    FEATURE_NETLINK_EVENTS=0)
+        ;;
+    *)
+        mkdir -p "$STAGE/tasks/event-link" "$STAGE/tasks/event-address"
+        ;;
+esac
+
 if [ "${INIT_STATUS_FALLBACK:-0}" -ne 0 ]; then
     rm -rf "$STAGE/run"
     ln -s missing-run "$STAGE/run"
@@ -28,6 +36,10 @@ if [ "${INIT_LOG_SYMLINK:-0}" -ne 0 ]; then
     printf 'SENTINEL-UNTOUCHED\n' > "$STAGE/var/log/sentinel"
     ln -s sentinel "$STAGE/var/log/init.log"
     : > "$STAGE/dev/log-symlink-test"
+fi
+
+if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ]; then
+    printf 'legacy-before-compression\n' > "$STAGE/var/log/init.log"
 fi
 
 install_bin()
@@ -73,6 +85,12 @@ if [ "${INIT_TASK_DISCOVERY_TEST:-0}" -ne 0 ]; then
     install_bin task_discovery_v1 tasks/always/.discovery_add
     install_bin task_discovery_v1 tasks/always/.discovery_new
     install_bin task_discovery_v2 tasks/always/.discovery_replace_v2
+fi
+
+if [ "${INIT_NETLINK_TEST:-0}" -ne 0 ]; then
+    install_bin task_netlink_controller tasks/boot/netlink_controller
+    install_bin task_netlink_link tasks/event-link/link_state
+    install_bin task_netlink_address tasks/event-address/address_state
 fi
 
 if [ "${INIT_STATUS_READER:-0}" -ne 0 ]; then

@@ -733,6 +733,22 @@ _Static_assert(sizeof(KStatx) == 256, "statx ABI changed");
 
 /* sockets */
 #define AF_INET       2
+#define AF_NETLINK    16
+
+#define SOCK_RAW      3
+#define NETLINK_ROUTE 0
+
+#define RTM_NEWLINK   16u
+#define RTM_DELLINK   17u
+#define RTM_NEWADDR   20u
+#define RTM_DELADDR   21u
+
+#define RTMGRP_LINK        0x00000001u
+#define RTMGRP_IPV4_IFADDR 0x00000010u
+#define RTMGRP_IPV6_IFADDR 0x00000100u
+
+#define NLMSG_ALIGNTO 4u
+#define NLMSG_HDRLEN  16u
 
 /* MIPS swaps the first socket types, generic value 2 would open TCP */
 #ifdef INIT_MIPS_ABI
@@ -752,6 +768,32 @@ typedef struct
     u32 addr;    /* network byte order */
     u8  pad[8];
 } KSockAddrIn;
+
+typedef struct
+{
+    u16 family;
+    u16 pad;
+    u32 pid;
+    u32 groups;
+} KSockAddrNl;
+
+typedef struct
+{
+    u32 length;
+    u16 type;
+    u16 flags;
+    u32 sequence;
+    u32 pid;
+} KNlMsgHdr;
+
+_Static_assert(sizeof(KSockAddrNl) == 12, "netlink address ABI changed");
+_Static_assert(offsetof(KSockAddrNl, pid) == 4, "netlink address pid offset changed");
+_Static_assert(offsetof(KSockAddrNl, groups) == 8, "netlink address groups offset changed");
+_Static_assert(sizeof(KNlMsgHdr) == 16, "netlink message ABI changed");
+_Static_assert(offsetof(KNlMsgHdr, type) == 4, "netlink message type offset changed");
+
+#define NETLINK_EVENT_LINK    0x1u
+#define NETLINK_EVENT_ADDRESS 0x2u
 
 /* watchdog ioctls */
 
@@ -861,6 +903,8 @@ bool NameSetInsertValue(char **names, u64 *values, char *storage, usize *count,
                         u64 value);
 bool TaskWatchEventValid(const void *data, usize bytes, usize *sizeOut);
 bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap);
+bool NetlinkEventMask(const void *data, usize bytes, u32 *maskOut);
+bool ParseEventSchedule(const char *name, u32 *eventMaskOut);
 bool ProbeTimeoutRecord(u64 *startNs, bool *bKilled, u64 *lastNs,
                         i32 *lastRc, u64 nowNs, u64 timeoutNs);
 u8 LogPolicyResolve(u8 policy, u8 defaultPolicy);
@@ -1044,6 +1088,81 @@ bool TaskWatchEventName(const KInotifyEvent *event, char *name, usize cap)
         }
     }
     return false;
+}
+
+bool NetlinkEventMask(const void *data, usize bytes, u32 *maskOut)
+{
+    if(maskOut != NULL)
+        *maskOut = 0;
+    if(data == NULL || bytes == 0)
+        return false;
+
+    const u8 *cursor = (const u8 *)data;
+    u32 mask = 0;
+    while(bytes > 0)
+    {
+        if(bytes < NLMSG_HDRLEN)
+            return false;
+
+        const KNlMsgHdr *header = (const KNlMsgHdr *)cursor;
+        usize length = (usize)header->length;
+        if(length < NLMSG_HDRLEN || length > bytes)
+            return false;
+        if(length > ~(usize)0 - (NLMSG_ALIGNTO - 1u))
+            return false;
+
+        usize aligned = (length + NLMSG_ALIGNTO - 1u) &
+                        ~(usize)(NLMSG_ALIGNTO - 1u);
+        if(aligned > bytes)
+            return false;
+
+        switch(header->type)
+        {
+        case RTM_NEWLINK:
+        case RTM_DELLINK:
+            mask |= NETLINK_EVENT_LINK;
+            break;
+        case RTM_NEWADDR:
+        case RTM_DELADDR:
+            mask |= NETLINK_EVENT_ADDRESS;
+            break;
+        default:
+            break;
+        }
+
+        cursor += aligned;
+        bytes -= aligned;
+    }
+
+    if(maskOut != NULL)
+        *maskOut = mask;
+    return true;
+}
+
+bool ParseEventSchedule(const char *name, u32 *eventMaskOut)
+{
+#if FEATURE_NETLINK_EVENTS
+    if(eventMaskOut != NULL)
+        *eventMaskOut = 0;
+    if(name == NULL || eventMaskOut == NULL)
+        return false;
+
+    if(StrEq(name, "event-link"))
+    {
+        *eventMaskOut = NETLINK_EVENT_LINK;
+        return true;
+    }
+    if(StrEq(name, "event-address"))
+    {
+        *eventMaskOut = NETLINK_EVENT_ADDRESS;
+        return true;
+    }
+    return false;
+#else
+    UNUSED(name);
+    UNUSED(eventMaskOut);
+    return false;
+#endif
 }
 
 usize StrCat(char *dst, usize cap, const char *src)
@@ -2245,6 +2364,150 @@ static bool StatusRead(const StatusBlock *status, StatusSnapshot *snapshot,
 }
 #endif
 
+#if FEATURE_LOG_COMPRESSION || defined(INIT_HOSTED)
+
+#define LOGD_FILE_VERSION       1u
+#define LOGD_FILE_HEADER_BYTES  32u
+#define LOGD_FRAME_HEADER_BYTES 36u
+#define LOGD_CODEC_RAW          0u
+#define LOGD_CODEC_LZ4          1u
+#define LOGD_LZ4_HASH_BITS      12u
+#define LOGD_LZ4_HASH_SIZE      (1u << LOGD_LZ4_HASH_BITS)
+#define LOGD_FRAME_EXTRA_BYTES  (LOGD_FILE_HEADER_BYTES + \
+                                 LOGD_FRAME_HEADER_BYTES + \
+                                 CFG_LOGD_BUF_BYTES / 255u + 64u)
+#define LOGD_FRAME_BUF_BYTES    (CFG_LOGD_BUF_BYTES + LOGD_FRAME_EXTRA_BYTES)
+
+_Static_assert(CFG_LOGD_BUF_BYTES <= 0xffffffffu,
+               "log buffer must fit a 32-bit frame size");
+_Static_assert(LOGD_FRAME_BUF_BYTES <= CFG_LOGD_MAX_BYTES,
+               "log frame must fit within one rotation");
+
+#if !defined(INIT_FIXTURE)
+
+static bool LogdLz4Put(u8 *out, usize cap, usize *at, u8 value)
+{
+    if(*at >= cap)
+        return false;
+    out[(*at)++] = value;
+    return true;
+}
+
+static bool LogdLz4Copy(u8 *out, usize cap, usize *at,
+                        const u8 *src, usize len)
+{
+    if(*at > cap || len > cap - *at)
+        return false;
+    memcpy(out + *at, src, len);
+    *at += len;
+    return true;
+}
+
+static bool LogdLz4PutLength(u8 *out, usize cap, usize *at, usize length)
+{
+    if(length < 15)
+        return true;
+    length -= 15;
+    while(length >= 255)
+    {
+        if(!LogdLz4Put(out, cap, at, 255))
+            return false;
+        length -= 255;
+    }
+    return LogdLz4Put(out, cap, at, (u8)length);
+}
+
+static u32 LogdLz4HashAt(const u8 *src)
+{
+    u32 value = (u32)src[0] | ((u32)src[1] << 8) |
+                ((u32)src[2] << 16) | ((u32)src[3] << 24);
+    return (value * 2654435761u) >> (32u - LOGD_LZ4_HASH_BITS);
+}
+
+static bool LogdLz4Encode(const u8 *src, usize srcLen, u8 *out, usize outCap,
+                          u32 *hash, usize *outLen)
+{
+    if(srcLen < 4)
+        return false;
+
+    for(usize i = 0; i < LOGD_LZ4_HASH_SIZE; i++)
+        hash[i] = ~(u32)0;
+
+    usize outAt = 0;
+    usize anchor = 0;
+    usize i = 0;
+    bool bCanMatch = srcLen >= 12;
+    usize matchSearchLimit = bCanMatch ? srcLen - 12 : 0;
+    while(bCanMatch && i <= matchSearchLimit)
+    {
+        u32 hashIndex = LogdLz4HashAt(src + i);
+        u32 previous = hash[hashIndex];
+        hash[hashIndex] = (u32)i;
+
+        if(previous != ~(u32)0 && i > (usize)previous &&
+           i - (usize)previous <= 65535u &&
+           memcmp(src + (usize)previous, src + i, 4) == 0)
+        {
+            usize match = i + 4;
+            usize previousMatch = (usize)previous + 4;
+            while(match < srcLen - 5 && src[match] == src[previousMatch])
+            {
+                match++;
+                previousMatch++;
+            }
+
+            usize tokenAt = outAt;
+            if(!LogdLz4Put(out, outCap, &outAt, 0))
+                return false;
+
+            usize literalLen = i - anchor;
+            u8 token = (u8)(literalLen >= 15 ? 0xf0u : literalLen << 4);
+            if(!LogdLz4PutLength(out, outCap, &outAt, literalLen) ||
+               !LogdLz4Copy(out, outCap, &outAt, src + anchor, literalLen))
+                return false;
+
+            u16 offset = (u16)(i - (usize)previous);
+            if(!LogdLz4Put(out, outCap, &outAt, (u8)offset) ||
+               !LogdLz4Put(out, outCap, &outAt, (u8)(offset >> 8)))
+                return false;
+
+            usize matchLen = match - i;
+            usize matchCode = matchLen - 4;
+            token |= (u8)(matchCode >= 15 ? 0x0fu : matchCode);
+            if(!LogdLz4PutLength(out, outCap, &outAt, matchCode))
+                return false;
+            out[tokenAt] = token;
+
+            usize matchedFrom = i;
+            i = match;
+            anchor = i;
+            for(usize insert = matchedFrom + 1;
+                insert + 4 <= i && insert + 4 <= srcLen; insert++)
+            {
+                hash[LogdLz4HashAt(src + insert)] = (u32)insert;
+            }
+            continue;
+        }
+        i++;
+    }
+
+    usize tokenAt = outAt;
+    if(!LogdLz4Put(out, outCap, &outAt, 0))
+        return false;
+    usize literalLen = srcLen - anchor;
+    u8 token = (u8)(literalLen >= 15 ? 0xf0u : literalLen << 4);
+    if(!LogdLz4PutLength(out, outCap, &outAt, literalLen) ||
+       !LogdLz4Copy(out, outCap, &outAt, src + anchor, literalLen))
+        return false;
+    out[tokenAt] = token;
+    *outLen = outAt;
+    return true;
+}
+
+#endif
+
+#endif
+
 #if !defined(INIT_HOSTED)
 
 /* syscalls */
@@ -2781,6 +3044,8 @@ void StatusInit(StatusBlock *status, StatusSnapshot *snapshot);
 #define SCHED_BOOT   1u   /* /tasks/boot/         run at boot, not respawned */
 #define SCHED_EVERY  2u   /* /tasks/<dur>/        interval since boot */
 #define SCHED_CAL    3u   /* /tasks/1d-03-30/     wall clock recurrence */
+#define SCHED_EVENT_LINK    4u /* /tasks/event-link/    link change trigger */
+#define SCHED_EVENT_ADDRESS 5u /* /tasks/event-address/ address change trigger */
 
 #define SCHEDULE_STATE_MAGIC          0x31415453u
 #define SCHEDULE_STATE_VERSION        1u
@@ -2843,6 +3108,7 @@ typedef struct
     i32  groupPid;
     u64  startedNs;
     u64  nextRunNs;
+    bool bEventPending;
     u64  backoffNs;
     u32  runs;
     u32  consecFails;
@@ -2928,6 +3194,7 @@ typedef struct
     u64          logdProgressSeenNs;
 
     i32          sntpFd;
+    i32          netlinkFd;
     u64          sntpNextNs;
     u64          sntpDeadlineNs;
     u64          sntpXmitNtp;
@@ -2959,7 +3226,7 @@ void TaskScanAll(InitState *st);
 #if FEATURE_STATIC_TASKS
 static void TaskLoadStatic(InitState *st);
 #endif
-void TaskStart(InitState *st, Task *t, u64 nowNs);
+bool TaskStart(InitState *st, Task *t, u64 nowNs);
 void TaskTick(InitState *st, u64 nowNs);
 bool TaskReap(InitState *st, i32 pid, i32 status, u64 nowNs);
 void TaskSignalAll(InitState *st, i32 sig);
@@ -2994,6 +3261,11 @@ void WdogClose(InitState *st);
 
 void SntpTick(InitState *st, u64 nowNs);
 void SntpHandleReply(InitState *st, u64 nowNs);
+
+#if FEATURE_NETLINK_EVENTS
+static void NetlinkOpen(InitState *st);
+static void NetlinkDrain(InitState *st);
+#endif
 
 void LogdSupervise(InitState *st, u64 nowNs);
 bool LogdReap(InitState *st, i32 pid, i32 status, u64 nowNs);
@@ -3591,6 +3863,9 @@ static u64 TaskNextRunNs(const Task *t, u64 nowNs)
         return nowNs + SecsUntilCalendar(&t->cal, unixSec, CFG_TZ_OFFSET_SEC) * NS_PER_SEC;
     }
 
+    if(t->schedule == SCHED_EVENT_LINK || t->schedule == SCHED_EVENT_ADDRESS)
+        return ~(u64)0;
+
     return nowNs;
 }
 
@@ -3641,6 +3916,13 @@ static bool TaskParseSchedule(const char *name, u32 *schedule, u64 *intervalNs,
     if(StrEq(name, "boot"))
     {
         *schedule = SCHED_BOOT;
+        return true;
+    }
+    u32 eventMask = 0;
+    if(ParseEventSchedule(name, &eventMask))
+    {
+        *schedule = eventMask == NETLINK_EVENT_LINK ? SCHED_EVENT_LINK :
+                                                       SCHED_EVENT_ADDRESS;
         return true;
     }
     if(ParseCalendar(name, cal))
@@ -3710,7 +3992,7 @@ static bool TaskBuildSpec(InitState *st, Task *t, const char *dirPath,
         LogF("%s: check path too long, skipped", TaskName(t));
         return false;
     }
-    t->bHasCheck = SysAccess(checkPath, X_OK) == 0;
+    t->bHasCheck = schedule == SCHED_ALWAYS && SysAccess(checkPath, X_OK) == 0;
 #endif
 
     t->schedule = schedule;
@@ -4313,6 +4595,93 @@ static bool TaskCanReuse(const Task *t)
            t->outFd < 0 && t->errFd < 0;
 }
 
+#if FEATURE_NETLINK_EVENTS
+
+static void NetlinkClose(InitState *st)
+{
+    if(st->netlinkFd >= 0)
+    {
+        SysClose(st->netlinkFd);
+        st->netlinkFd = -1;
+    }
+}
+
+static void NetlinkOpen(InitState *st)
+{
+    isize fd = SysSocket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                         NETLINK_ROUTE);
+    if(fd < 0)
+    {
+        LogF("netlink events unavailable (%d)", (i32)fd);
+        return;
+    }
+
+    KSockAddrNl address;
+    memset(&address, 0, sizeof(address));
+    address.family = AF_NETLINK;
+    address.groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR;
+    isize bound = SysBind((i32)fd, &address, (u32)sizeof(address));
+    if(bound < 0)
+    {
+        LogF("netlink events bind failed (%d)", (i32)bound);
+        SysClose((i32)fd);
+        return;
+    }
+
+    st->netlinkFd = (i32)fd;
+    LogF("netlink events armed");
+}
+
+static void NetlinkQueue(InitState *st, u32 eventMask)
+{
+    for(usize i = 0; i < st->taskCount; i++)
+    {
+        Task *t = &st->task[i];
+        u32 taskMask = 0;
+        if(t->schedule == SCHED_EVENT_LINK)
+            taskMask = NETLINK_EVENT_LINK;
+        else if(t->schedule == SCHED_EVENT_ADDRESS)
+            taskMask = NETLINK_EVENT_ADDRESS;
+
+        if(!t->bPresent || t->bRetiring || taskMask == 0 ||
+           (eventMask & taskMask) == 0 || !TaskCanReuse(t))
+            continue;
+        if(t->state == TS_DONE || t->state == TS_FAILED)
+            continue;
+        t->bEventPending = true;
+    }
+}
+
+static void NetlinkDrain(InitState *st)
+{
+    u8 buffer[8192] __attribute__((aligned(8)));
+    for(;;)
+    {
+        isize n = SysRecvFrom(st->netlinkFd, buffer, sizeof(buffer), 0, NULL, NULL);
+        if(n == -EINTR)
+            continue;
+        if(n == -EAGAIN)
+            return;
+        if(n <= 0)
+        {
+            LogF("netlink events read failed (%d)", (i32)n);
+            NetlinkClose(st);
+            return;
+        }
+
+        u32 eventMask = 0;
+        if(!NetlinkEventMask(buffer, (usize)n, &eventMask))
+        {
+            LogF("netlink events message malformed");
+            continue;
+        }
+        if(eventMask != 0)
+            NetlinkQueue(st, eventMask);
+    }
+}
+
+#endif
+
 static void ProbeCancel(Task *t, bool bLog, u64 nowNs)
 {
     if(t->probePid <= 0)
@@ -4379,7 +4748,7 @@ static bool TaskCaptureOpen(Task *t, i32 fds[2], const char *stream)
 }
 #endif
 
-void TaskStart(InitState *st, Task *t, u64 nowNs)
+bool TaskStart(InitState *st, Task *t, u64 nowNs)
 {
     UNUSED(st);
 
@@ -4413,7 +4782,7 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
         t->nextRunNs = nowNs + t->backoffNs;
         t->state = TS_BACKOFF;
         LogF("%s: fork failed (%d)", TaskName(t), pid);
-        return;
+        return false;
     }
 
     t->outFd = outPipe[0];
@@ -4431,6 +4800,7 @@ void TaskStart(InitState *st, Task *t, u64 nowNs)
     t->nextProbeNs = nowNs + t->graceNs;
 
     LogF("%s: started pid %d", TaskName(t), pid);
+    return true;
 }
 
 void TaskDrain(InitState *st, Task *t)
@@ -4517,6 +4887,15 @@ static void TaskOnExit(InitState *st, Task *t, i32 status, u64 nowNs)
     }
 
     bool bClean = t->lastSignal == 0 && t->lastExit == 0;
+
+    if(t->schedule == SCHED_EVENT_LINK || t->schedule == SCHED_EVENT_ADDRESS)
+    {
+        t->state = TS_IDLE;
+        if(!bClean)
+            LogF("%s: event run exit %d sig %d", TaskName(t), t->lastExit,
+                 t->lastSignal);
+        return;
+    }
 
     if(t->schedule == SCHED_EVERY || t->schedule == SCHED_CAL)
     {
@@ -4671,6 +5050,12 @@ void TaskTick(InitState *st, u64 nowNs)
             {
                 TaskStart(st, t, nowNs);
             }
+            else if(t->schedule == SCHED_EVENT_LINK ||
+                    t->schedule == SCHED_EVENT_ADDRESS)
+            {
+                if(t->bEventPending && TaskStart(st, t, nowNs))
+                    t->bEventPending = false;
+            }
             else if(nowNs >= t->nextRunNs)
             {
                 /* Advance before spawning to avoid a false overrun */
@@ -4681,7 +5066,15 @@ void TaskTick(InitState *st, u64 nowNs)
 
         case TS_BACKOFF:
             if(nowNs >= t->nextRunNs)
-                TaskStart(st, t, nowNs);
+            {
+                bool bEvent = t->schedule == SCHED_EVENT_LINK ||
+                               t->schedule == SCHED_EVENT_ADDRESS;
+                if(!bEvent || t->bEventPending)
+                {
+                    if(TaskStart(st, t, nowNs) && bEvent)
+                        t->bEventPending = false;
+                }
+            }
             break;
 
         case TS_RUNNING:
@@ -5027,6 +5420,10 @@ static bool WdogCriticalHealthy(const InitState *st, u64 nowNs)
         if(!t->bPresent || t->bRetiring || !t->bCritical)
             continue;
 
+        if((t->schedule == SCHED_EVENT_LINK ||
+            t->schedule == SCHED_EVENT_ADDRESS) && t->state != TS_RUNNING)
+            continue;
+
         if(t->state != TS_RUNNING || t->pid <= 0)
             return false;
         if(t->lastProcState == 'Z')
@@ -5242,6 +5639,11 @@ void SntpHandleReply(InitState *st, u64 nowNs)
   #define CFG_LOGD_UID 0
 #endif
 
+#if FEATURE_LOG_COMPRESSION
+static const u8 LOGD_FILE_MAGIC[8] = { 'I', 'N', 'I', 'T', 'L', 'O', 'G', 0 };
+static const u8 LOGD_FRAME_MAGIC[4] = { 'I', 'F', 'R', 'M' };
+#endif
+
 typedef struct
 {
     bool  bOpen;
@@ -5276,6 +5678,19 @@ typedef struct
     i32   fd;
     u64   fileBytes;
     u64   lastFlushNs;
+
+#if FEATURE_LOG_COMPRESSION
+    u8    frame[LOGD_FRAME_BUF_BYTES];
+    u32   lz4Hash[LOGD_LZ4_HASH_SIZE];
+    usize frameLen;
+    usize framePlainLen;
+    u64   frameSequence;
+    u64   fileSequence;
+    bool  bFileInitialized;
+    bool  bFileHeaderWritten;
+    bool  bFrameHasFileHeader;
+    bool  bFrameNeedsRotation;
+#endif
 
     LogIdentity last;
     u32   repeats;
@@ -5327,7 +5742,15 @@ static bool LogdRotate(LogdState *ls)
     }
 
     if(bActiveReady)
+    {
         ls->fileBytes = 0;
+ #if FEATURE_LOG_COMPRESSION
+        ls->fileSequence++;
+        ls->frameSequence = 0;
+        ls->bFileInitialized = false;
+        ls->bFileHeaderWritten = false;
+ #endif
+    }
     return bActiveReady;
 }
 
@@ -5349,12 +5772,208 @@ static bool LogdOpen(LogdState *ls)
         ls->fd = -1;
         return false;
     }
+
+#if FEATURE_LOG_COMPRESSION
+    if(!ls->bFileInitialized && end > 0)
+    {
+        SysClose(ls->fd);
+        ls->fd = -1;
+        if(!LogdRotate(ls))
+            return false;
+        return LogdOpen(ls);
+    }
+#endif
+
     ls->fileBytes = (u64)end;
+#if FEATURE_LOG_COMPRESSION
+    if(!ls->bFileInitialized)
+    {
+        ls->bFileInitialized = true;
+        ls->bFileHeaderWritten = false;
+    }
+#endif
     return true;
 }
 
+#if FEATURE_LOG_COMPRESSION
+
+static void LogdPutU16(u8 *dst, u16 value)
+{
+    dst[0] = (u8)value;
+    dst[1] = (u8)(value >> 8);
+}
+
+static void LogdPutU32(u8 *dst, u32 value)
+{
+    for(usize i = 0; i < 4; i++)
+        dst[i] = (u8)(value >> (i * 8));
+}
+
+static void LogdPutU64(u8 *dst, u64 value)
+{
+    for(usize i = 0; i < 8; i++)
+        dst[i] = (u8)(value >> (i * 8));
+}
+
+static u32 LogdCrc32(const u8 *data, usize len)
+{
+    u32 crc = ~(u32)0;
+    for(usize i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for(u32 bit = 0; bit < 8; bit++)
+            crc = (crc & 1u) != 0 ? (crc >> 1) ^ 0xedb88320u : crc >> 1;
+    }
+    return ~crc;
+}
+
+static void LogdBuildFileHeader(LogdState *ls)
+{
+    u8 *header = ls->frame;
+    memcpy(header, LOGD_FILE_MAGIC, sizeof(LOGD_FILE_MAGIC));
+    LogdPutU16(header + 8, LOGD_FILE_VERSION);
+    LogdPutU16(header + 10, LOGD_FILE_HEADER_BYTES);
+    LogdPutU32(header + 12, 0);
+    LogdPutU64(header + 16, ls->fileSequence);
+    LogdPutU32(header + 24, 0);
+    LogdPutU32(header + 28, 0);
+    LogdPutU32(header + 28, LogdCrc32(header, LOGD_FILE_HEADER_BYTES));
+}
+
+static bool LogdBuildFrame(LogdState *ls)
+{
+    usize fileHeaderBytes = ls->bFileHeaderWritten ? 0 : LOGD_FILE_HEADER_BYTES;
+    usize frameAt = fileHeaderBytes;
+    usize payloadAt = frameAt + LOGD_FRAME_HEADER_BYTES;
+    usize encodedLen = 0;
+    u32 codec = LOGD_CODEC_RAW;
+
+    if(payloadAt > sizeof(ls->frame))
+        return false;
+    if(LogdLz4Encode((const u8 *)ls->buf, ls->len,
+                     ls->frame + payloadAt, sizeof(ls->frame) - payloadAt,
+                     ls->lz4Hash, &encodedLen) && encodedLen < ls->len)
+    {
+        codec = LOGD_CODEC_LZ4;
+    }
+    else
+    {
+        if(ls->len > sizeof(ls->frame) - payloadAt)
+            return false;
+        memcpy(ls->frame + payloadAt, ls->buf, ls->len);
+        encodedLen = ls->len;
+    }
+
+    u8 *header = ls->frame + frameAt;
+    memcpy(header, LOGD_FRAME_MAGIC, sizeof(LOGD_FRAME_MAGIC));
+    LogdPutU16(header + 4, LOGD_FRAME_HEADER_BYTES);
+    header[6] = (u8)codec;
+    header[7] = 0;
+    LogdPutU64(header + 8, ls->frameSequence);
+    LogdPutU32(header + 16, (u32)ls->len);
+    LogdPutU32(header + 20, (u32)encodedLen);
+    LogdPutU32(header + 24, LogdCrc32(ls->frame + payloadAt, encodedLen));
+    LogdPutU32(header + 28, 0);
+    LogdPutU32(header + 32, 0);
+    LogdPutU32(header + 28, LogdCrc32(header, LOGD_FRAME_HEADER_BYTES));
+    if(fileHeaderBytes != 0)
+        LogdBuildFileHeader(ls);
+
+    ls->frameLen = payloadAt + encodedLen;
+    ls->framePlainLen = ls->len;
+    ls->bFrameHasFileHeader = fileHeaderBytes != 0;
+    ls->bFrameNeedsRotation = false;
+    return true;
+}
+
+static bool LogdWritePending(LogdState *ls, u64 nowNs)
+{
+    if(ls->frameLen == 0)
+        return true;
+
+    if(ls->bFrameNeedsRotation)
+    {
+        if(!LogdRotate(ls))
+            return false;
+        ls->frameLen = 0;
+        ls->framePlainLen = 0;
+        ls->bFrameHasFileHeader = false;
+        if(!LogdOpen(ls) || !LogdBuildFrame(ls))
+            return false;
+    }
+    if(!LogdOpen(ls))
+        return false;
+
+    usize written = 0;
+    bool bFailed = false;
+    while(written < ls->frameLen)
+    {
+        isize n = SysWrite(ls->fd, ls->frame + written, ls->frameLen - written);
+        if(n == -EINTR)
+            continue;
+        if(n <= 0 || (usize)n > ls->frameLen - written)
+        {
+            bFailed = true;
+            break;
+        }
+        written += (usize)n;
+    }
+
+    if(written > 0)
+    {
+        memmove(ls->frame, ls->frame + written, ls->frameLen - written);
+        ls->frameLen -= written;
+        ls->fileBytes += written;
+    }
+    if(bFailed)
+    {
+        SysClose(ls->fd);
+        ls->fd = -1;
+        return false;
+    }
+    if(ls->frameLen != 0)
+        return false;
+
+    if(ls->bFrameHasFileHeader)
+        ls->bFileHeaderWritten = true;
+    memmove(ls->buf, ls->buf + ls->framePlainLen, ls->len - ls->framePlainLen);
+    ls->len -= ls->framePlainLen;
+    ls->framePlainLen = 0;
+    ls->bFrameHasFileHeader = false;
+    ls->frameSequence++;
+    ls->lastFlushNs = nowNs;
+    return true;
+}
+
+static void LogdFlushCompressed(LogdState *ls, u64 nowNs)
+{
+    if(ls->frameLen != 0)
+    {
+        LogdWritePending(ls, nowNs);
+        return;
+    }
+    if(ls->len == 0)
+    {
+        ls->lastFlushNs = nowNs;
+        return;
+    }
+    if(!LogdOpen(ls) || !LogdBuildFrame(ls))
+        return;
+    if(ls->fileBytes >= CFG_LOGD_MAX_BYTES ||
+       ls->frameLen > (usize)(CFG_LOGD_MAX_BYTES - ls->fileBytes))
+    {
+        ls->bFrameNeedsRotation = true;
+    }
+    LogdWritePending(ls, nowNs);
+}
+
+#endif
+
 static void LogdFlush(LogdState *ls, u64 nowNs)
 {
+#if FEATURE_LOG_COMPRESSION
+    LogdFlushCompressed(ls, nowNs);
+#else
     if(ls->len == 0)
     {
         ls->lastFlushNs = nowNs;
@@ -5394,6 +6013,7 @@ static void LogdFlush(LogdState *ls, u64 nowNs)
     }
     if(ls->len == 0)
         ls->lastFlushNs = nowNs;
+#endif
 }
 
 static void LogdBreakChains(LogdState *ls)
@@ -5557,6 +6177,8 @@ NORETURN void LogWriterMain(InitState *st)
     }
     if(st->sntpFd >= 0)
         SysClose(st->sntpFd);
+    if(st->netlinkFd >= 0)
+        SysClose(st->netlinkFd);
 
     /* Retain the console for writer failures */
     LogAttach(NULL, st->consoleFd);
@@ -5581,6 +6203,17 @@ NORETURN void LogWriterMain(InitState *st)
         __atomic_store_n(&st->ring->writerProgress, ++progress, __ATOMIC_RELEASE);
 
         u64 nowNs = SysBootNs();
+#if FEATURE_LOG_COMPRESSION
+        if(ls.frameLen != 0)
+        {
+            LogdWritePending(&ls, nowNs);
+            if(ls.frameLen != 0)
+            {
+                LogdSleep(200ull * NS_PER_MS);
+                continue;
+            }
+        }
+#endif
         LogSlot slot;
         u64 lostTotal = 0;
         u32 drained = 0;
@@ -6374,8 +7007,8 @@ static u64 NextDeadline(InitState *st, u64 nowNs)
 
 static void EventLoop(InitState *st, const KSigSet *unblocked)
 {
-    KPollFd fds[CFG_MAX_TASKS * 2 + 2];
-    Task *owner[CFG_MAX_TASKS * 2 + 2];
+    KPollFd fds[CFG_MAX_TASKS * 2 + 3];
+    Task *owner[CFG_MAX_TASKS * 2 + 3];
 
     for(;;)
     {
@@ -6456,6 +7089,9 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
 #if FEATURE_TASK_DISCOVERY
         usize taskWatchSlot = (usize)-1;
 #endif
+#if FEATURE_NETLINK_EVENTS
+        usize netlinkSlot = (usize)-1;
+#endif
         if(st->sntpFd >= 0)
         {
             sntpSlot = nfds;
@@ -6472,6 +7108,18 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
             taskWatchSlot = nfds;
             owner[nfds] = NULL;
             fds[nfds].fd = st->taskWatchFd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+#endif
+
+#if FEATURE_NETLINK_EVENTS
+        if(st->netlinkFd >= 0)
+        {
+            netlinkSlot = nfds;
+            owner[nfds] = NULL;
+            fds[nfds].fd = st->netlinkFd;
             fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;
             nfds++;
@@ -6507,6 +7155,13 @@ static void EventLoop(InitState *st, const KSigSet *unblocked)
                 continue;
             }
 #endif
+#if FEATURE_NETLINK_EVENTS
+            if(i == netlinkSlot)
+            {
+                NetlinkDrain(st);
+                continue;
+            }
+#endif
             /* Drain POLLHUP so writers cannot block behind unread pipe data */
             TaskDrain(st, owner[i]);
         }
@@ -6521,6 +7176,7 @@ void InitMain(void)
     memset(st, 0, sizeof(*st));
     st->wdogFd = -1;
     st->sntpFd = -1;
+    st->netlinkFd = -1;
     st->taskWatchFd = -1;
     st->consoleFd = 2;
 
@@ -6556,6 +7212,9 @@ void InitMain(void)
 
 #if FEATURE_TASK_DISCOVERY
     TaskWatchOpen(st);
+#endif
+#if FEATURE_NETLINK_EVENTS
+    NetlinkOpen(st);
 #endif
 #if FEATURE_STATIC_TASKS
     TaskLoadStatic(st);

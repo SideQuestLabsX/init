@@ -54,7 +54,7 @@ static bool WaitForFile(const char *path, usize attempts)
     return false;
 }
 
-#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK
+#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK && !defined(FIXTURE_LOG_FORMAT_DISABLED)
 static void MatchMarker(char c, const char *marker, usize *matched, bool *bFound)
 {
     if(c == marker[*matched])
@@ -169,6 +169,7 @@ static bool WaitForWatchdogPets(void)
 }
 #endif
 
+#if !defined(FIXTURE_LOG_FORMAT_DISABLED)
 static void DumpLog(void)
 {
     isize fd = SysOpen("/var/log/init.log", O_RDONLY, 0);
@@ -198,6 +199,7 @@ static void DumpLog(void)
         SysClose((i32)con);
     SysClose((i32)fd);
 }
+#endif
 
 void FixtureMain(void)
 {
@@ -209,7 +211,7 @@ void FixtureMain(void)
         FixtureSay("FIXTURE log writer fixture incomplete");
 #endif
 
-#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK
+#if FEATURE_LOG_CAPTURE && FEATURE_LOG_DISK && !defined(FIXTURE_LOG_FORMAT_DISABLED)
     if(!FileExists("/dev/log-symlink-test"))
     {
         if(WaitForLogCompletion())
@@ -237,7 +239,12 @@ void FixtureMain(void)
         FixtureSay("FIXTURE watchdog completion incomplete");
 #endif
 
+#if defined(FIXTURE_LOG_FORMAT_DISABLED)
+    FixtureSay("FIXTURE logfile begin");
+    FixtureSay("FIXTURE logfile end");
+#else
     DumpLog();
+#endif
     FixtureSay("FIXTURE selftest done");
 
     SysKill(1, SIGUSR1);
