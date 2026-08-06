@@ -82,8 +82,24 @@ limits, timing, output routes, the fixed timezone offset, SNTP settings, the
 schedule state paths and the per-task rules table. There is no runtime
 configuration file. Immutable images can define `FEATURE_STATIC_TASKS=1` and
 provide `INIT_STATIC_TASKS_H` with a NULL-terminated `STATIC_TASKS` table. This
-loads only the compiled task list and disables runtime discovery. `PIE=0` is the
-only make-time configuration switch outside the header.
+loads only the compiled task list and disables runtime discovery.
+
+Release builds provide named profiles:
+
+| Profile | Behavior |
+|---|---|
+| `standard` | Shipped defaults |
+| `offline` | Shipped defaults without runtime SNTP networking |
+| `volatile` | Shipped defaults without disk logging |
+| `offline-volatile` | No runtime SNTP networking or disk logging |
+| `compressed` | Shipped defaults with checksummed LZ4-framed disk logs |
+| `persistent` | Shipped defaults with reboot-persistent interval schedules |
+| `durable` | Persistent schedules and compressed disk logs |
+| `lean` | Offline supervision without watchdog, probes, capture, disk logging, live discovery or netlink events |
+
+Every profile keeps capability dropping enabled. Static task tables remain
+image-specific and are not distributed as a generic profile. `PROFILE`,
+`RELEASE` and `PIE` are the make-time configuration switches outside the header.
 
 ## Build
 
@@ -94,12 +110,21 @@ and `mipsel`.
 
 ```sh
 make ARCH=x86_64
+make ARCH=x86_64 PROFILE=offline
 make allarch
 ```
 
 GCC, Clang and `zig cc` are supported as compiler drivers. `make allarch` builds
 targets whose configured compilers are installed. The default is static PIE,
-except LoongArch and MIPS; `PIE=0` selects `-static -no-pie` elsewhere.
+except LoongArch and MIPS; `PIE=0` selects `-static -no-pie` elsewhere. Named
+profiles use separate output directories such as `build/x86_64-offline`.
+CalVer releases use tags such as `v2026.08.06`. Manually running the release
+workflow derives the current UTC date, resumes an incomplete same-commit draft
+and skips an existing published release. Each release contains one archive per
+architecture with every profile executable, a matching status reader, build
+metadata and profile definitions. Released executables report their release and
+profile in the startup message. Install the selected `init-<profile>` executable
+as `/bin/init`.
 
 ## Test
 

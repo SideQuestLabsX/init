@@ -1,0 +1,3 @@
+#define INIT_PROFILE_NAME "offline"
+#define FEATURE_CAPABILITY_DROP 1
+#define OFFLINE_MODE 1

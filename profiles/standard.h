@@ -1,0 +1,2 @@
+#define INIT_PROFILE_NAME "standard"
+#define FEATURE_CAPABILITY_DROP 1

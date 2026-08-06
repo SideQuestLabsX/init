@@ -2699,8 +2699,10 @@ static inline isize SysOpen(const char *path, i32 flags, i32 mode)
 static inline isize SysClose(i32 fd)
 { return SysCall1(SYS_close, fd); }
 
+#if FEATURE_LOG_DISK || defined(INIT_FIXTURE)
 static inline isize SysLseek(i32 fd, i64 off, i32 whence)
 { return SysCall3(SYS_lseek, fd, (isize)off, whence); }
+#endif
 
 static inline isize SysFtruncate(i32 fd, i64 len)
 { return SysCall2(SYS_ftruncate, fd, (isize)len); }
@@ -2716,6 +2718,7 @@ static inline isize SysMkdir(const char *path, i32 mode)
 static inline isize SysUnlink(const char *path)
 { return SysCall3(SYS_unlinkat, AT_FDCWD, (isize)path, 0); }
 
+#if FEATURE_LOG_DISK || (FEATURE_PERSIST_SCHEDULE && !OFFLINE_MODE) || defined(INIT_FIXTURE)
 static inline isize SysRename(const char *from, const char *to)
 {
 #ifdef SYS_renameat2
@@ -2724,6 +2727,7 @@ static inline isize SysRename(const char *from, const char *to)
     return SysCall4(SYS_renameat, AT_FDCWD, (isize)from, AT_FDCWD, (isize)to);
 #endif
 }
+#endif
 
 static inline isize SysAccess(const char *path, i32 mode)
 { return SysCall3(SYS_faccessat, AT_FDCWD, (isize)path, mode); }
@@ -2737,6 +2741,7 @@ static inline isize SysStatx(const char *path, u32 mask, KStatx *out)
 static inline isize SysGetdents64(i32 fd, void *buf, usize n)
 { return SysCall3(SYS_getdents64, fd, (isize)buf, (isize)n); }
 
+#if FEATURE_TASK_DISCOVERY || defined(INIT_FIXTURE)
 static inline isize SysInotifyInit1(i32 flags)
 { return SysCall1(SYS_inotify_init1, flags); }
 
@@ -2745,6 +2750,7 @@ static inline isize SysInotifyAddWatch(i32 fd, const char *path, u32 mask)
 
 static inline isize SysInotifyRmWatch(i32 fd, i32 wd)
 { return SysCall2(SYS_inotify_rm_watch, fd, wd); }
+#endif
 
 static inline isize SysUmask(i32 mask)
 { return SysCall1(SYS_umask, mask); }
@@ -2752,14 +2758,18 @@ static inline isize SysUmask(i32 mask)
 static inline isize SysDup3(i32 old, i32 newfd, i32 flags)
 { return SysCall3(SYS_dup3, old, newfd, flags); }
 
+#if FEATURE_LOG_CAPTURE
 static inline isize SysPipe2(i32 fds[2], i32 flags)
 { return SysCall2(SYS_pipe2, (isize)fds, flags); }
 
 static inline isize SysFcntl(i32 fd, i32 cmd, isize arg)
 { return SysCall3(SYS_fcntl, fd, cmd, arg); }
+#endif
 
+#if FEATURE_WATCHDOG
 static inline isize SysIoctl(i32 fd, u32 req, isize arg)
 { return SysCall3(SYS_ioctl, fd, (isize)(usize)req, arg); }
+#endif
 
 static inline void *SysMmap(void *addr, usize len, i32 prot, i32 flags, i32 fd, i64 off)
 {
@@ -2845,6 +2855,7 @@ static inline isize SysClockGetTime(i32 clk, KTimeSpec *ts)
 #endif
 }
 
+#if !OFFLINE_MODE
 static inline isize SysClockSetTime(i32 clk, const KTimeSpec *ts)
 {
 #ifdef FIXTURE_CLOCK_SET_SUCCESS
@@ -2859,6 +2870,7 @@ static inline isize SysClockSetTime(i32 clk, const KTimeSpec *ts)
 #endif
 #endif
 }
+#endif
 
 static inline isize SysPpoll(KPollFd *fds, usize n, const KTimeSpec *timeout,
                              const KSigSet *mask)
@@ -2872,22 +2884,30 @@ static inline isize SysPpoll(KPollFd *fds, usize n, const KTimeSpec *timeout,
 #endif
 }
 
+#if !OFFLINE_MODE || FEATURE_NETLINK_EVENTS || defined(INIT_FIXTURE)
 static inline isize SysSocket(i32 domain, i32 type, i32 proto)
 { return SysCall3(SYS_socket, domain, type, proto); }
 
+#if !OFFLINE_MODE
 static inline isize SysConnect(i32 fd, const void *addr, u32 addrlen)
 { return SysCall3(SYS_connect, fd, (isize)addr, (isize)addrlen); }
+#endif
 
 static inline isize SysBind(i32 fd, const void *addr, u32 addrlen)
 { return SysCall3(SYS_bind, fd, (isize)addr, (isize)addrlen); }
+#endif
 
+#if !OFFLINE_MODE || defined(INIT_FIXTURE)
 static inline isize SysSendTo(i32 fd, const void *buf, usize n, i32 flags,
-                               const void *addr, u32 addrlen)
+                              const void *addr, u32 addrlen)
 { return SysCall6(SYS_sendto, fd, (isize)buf, (isize)n, flags, (isize)addr, (isize)addrlen); }
+#endif
 
+#if !OFFLINE_MODE || FEATURE_NETLINK_EVENTS || defined(INIT_FIXTURE)
 static inline isize SysRecvFrom(i32 fd, void *buf, usize n, i32 flags,
                                 void *addr, u32 *addrlen)
 { return SysCall6(SYS_recvfrom, fd, (isize)buf, (isize)n, flags, (isize)addr, (isize)addrlen); }
+#endif
 
 static inline isize SysGetRandom(void *buf, usize n, u32 flags)
 { return SysCall3(SYS_getrandom, (isize)buf, (isize)n, (isize)(usize)flags); }
@@ -2922,11 +2942,13 @@ static inline u64 SysBootNs(void)
 static inline u64 SysRealNs(void)
 { return SysNow(CLOCK_REALTIME); }
 
+#if FEATURE_LOG_CAPTURE
 static inline bool SysSetNonBlock(i32 fd)
 {
     isize fl = SysFcntl(fd, F_GETFL, 0);
     return fl >= 0 && SysFcntl(fd, F_SETFL, fl | O_NONBLOCK) >= 0;
 }
+#endif
 
 #if !defined(INIT_FIXTURE)
 
@@ -7188,7 +7210,8 @@ void InitMain(void)
         st->ring = (LogRing *)ringMem;
 
     LogAttach(st->ring, st->consoleFd);
-    LogF("init " INIT_ARCH_NAME " starting, pid %d", (i32)SysGetPid());
+    LogF("init " INIT_ARCH_NAME " starting, pid %d, release %s, profile %s",
+         (i32)SysGetPid(), INIT_RELEASE, INIT_PROFILE_NAME);
 
     void *statusMem = MapStatus(bRunMounted);
     if(statusMem != NULL)

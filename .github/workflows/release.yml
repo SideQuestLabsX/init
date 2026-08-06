@@ -1,0 +1,163 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: prepare release
+    runs-on: ubuntu-24.04
+    outputs:
+      complete: ${{ steps.release.outputs.complete }}
+      release: ${{ steps.release.outputs.release }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: choose release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "releases must run from main, got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+          release=$(date -u +%Y.%m.%d)
+          tag="v$release"
+          complete=false
+
+          if data=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,name,targetCommitish \
+              --jq '[.isDraft, .name, .targetCommitish] | @tsv' 2>/dev/null); then
+            IFS=$'\t' read -r isDraft name targetCommitish <<< "$data"
+            if [[ "$name" != "$release" ]]; then
+              echo "$tag already belongs to release '$name'" >&2
+              exit 1
+            fi
+            if [[ "$isDraft" == false ]]; then
+              complete=true
+              echo "release $release is already published"
+            elif [[ "$targetCommitish" != "$GITHUB_SHA" ]]; then
+              echo "draft $release targets $targetCommitish, not $GITHUB_SHA" >&2
+              exit 1
+            else
+              echo "resuming incomplete draft $release"
+            fi
+          fi
+
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: package ${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.complete != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            cc: gcc-14
+            packages: gcc-14
+          - arch: x86
+            cc: gcc-14
+            packages: gcc-14-multilib
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc-14
+            packages: gcc-14-aarch64-linux-gnu
+          - arch: armv7
+            cc: arm-linux-gnueabihf-gcc-14
+            packages: gcc-14-arm-linux-gnueabihf
+          - arch: armv6
+            cc: arm-linux-gnueabihf-gcc-14
+            packages: gcc-14-arm-linux-gnueabihf
+          - arch: riscv64
+            cc: riscv64-linux-gnu-gcc-14
+            packages: gcc-14-riscv64-linux-gnu
+          - arch: loongarch64
+            cc: loongarch64-linux-gnu-gcc-14
+            packages: gcc-14-loongarch64-linux-gnu
+          - arch: mips
+            cc: mips-linux-gnu-gcc-14
+            packages: gcc-14-mips-linux-gnu
+          - arch: mipsel
+            cc: mipsel-linux-gnu-gcc-14
+            packages: gcc-14-mipsel-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
+      - name: build package
+        run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} RELEASE=${{ needs.prepare.outputs.release }} OUT=out/release release-archive
+      - name: upload package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.arch }}
+          path: out/release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.complete != 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: download packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: verify packages
+        run: |
+          count=$(find dist -maxdepth 1 -name '*.tar.xz' -type f | wc -l)
+          if [ "$count" -ne 9 ]; then
+            echo "expected 9 release packages, found $count" >&2
+            exit 1
+          fi
+          cd dist
+          sha256sum *.tar.xz > SHA256SUMS
+      - name: stage assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ needs.prepare.outputs.release }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+                --json isDraft --jq .isDraft) == false ]]; then
+              echo "release $RELEASE was published while packages were building"
+              exit 0
+            fi
+          else
+            gh release create "$TAG" --draft --generate-notes --title "$RELEASE" \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
+
+          gh release upload "$TAG" dist/*.tar.xz dist/SHA256SUMS --clobber \
+            --repo "$GITHUB_REPOSITORY"
+
+          assetCount=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets | length')
+          if [[ "$assetCount" -ne 10 ]]; then
+            echo "expected 10 release assets, found $assetCount" >&2
+            exit 1
+          fi
+
+          gh release edit "$TAG" --draft=false --latest \
+            --repo "$GITHUB_REPOSITORY"

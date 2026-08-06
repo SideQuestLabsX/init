@@ -1,0 +1,3 @@
+#define INIT_PROFILE_NAME "compressed"
+#define FEATURE_CAPABILITY_DROP 1
+#define FEATURE_LOG_COMPRESSION 1

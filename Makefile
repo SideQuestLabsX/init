@@ -1,12 +1,36 @@
 # Freestanding build without libc or crt0
 
 ARCHES  := x86_64 x86 aarch64 armv7 armv6 riscv64 loongarch64 mips mipsel
+PROFILES := standard offline volatile offline-volatile compressed persistent durable lean
 
 ARCH    ?= x86_64
-BUILD   ?= build/$(ARCH)
+PROFILE ?= custom
+RELEASE ?= development
+OUT     ?= out/release
+
+BUILD_SUFFIX :=
+ifneq ($(PROFILE),custom)
+  BUILD_SUFFIX := $(BUILD_SUFFIX)-$(PROFILE)
+endif
+ifneq ($(RELEASE),development)
+  BUILD_SUFFIX := $(BUILD_SUFFIX)-$(RELEASE)
+endif
+BUILD   ?= build/$(ARCH)$(BUILD_SUFFIX)
 TARGET  := $(BUILD)/init
 
 CC      ?= gcc
+CC_ID   := $(notdir $(firstword $(CC)))
+PROFILE_BUILD_ROOT ?= build/profiles/$(ARCH)/$(CC_ID)/$(RELEASE)
+
+ifneq ($(PROFILE),custom)
+  ifeq ($(filter $(PROFILE),$(PROFILES)),)
+    $(error Unknown PROFILE '$(PROFILE)'. Use: $(PROFILES))
+  endif
+  PROFILE_HEADER := profiles/$(PROFILE).h
+  PROFILE_CFLAGS := -include $(PROFILE_HEADER)
+endif
+
+RELEASE_CFLAGS := -DINIT_RELEASE='"$(RELEASE)"'
 
 # Every flag here is load-bearing. Stack protection uses the runtime in init.c
 CFLAGS_COMMON := \
@@ -97,6 +121,9 @@ else
   BOOT_RULES :=
   CONFIG_DEPS := config.h
 endif
+ifneq ($(PROFILE_HEADER),)
+  CONFIG_DEPS += $(PROFILE_HEADER)
+endif
 ifeq ($(WATCHDOG_TEST),1)
   BOOT_CFLAGS += -DCFG_WDOG_TIMEOUT_SEC=2 \
                  -DCFG_WDOG_PET_NS=200000000ull \
@@ -104,16 +131,17 @@ ifeq ($(WATCHDOG_TEST),1)
                  -DOFFLINE_MODE=1
 endif
 
-CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(COMPILE_MODE) $(EXTRA_CFLAGS) \
-           $(WARN_CFLAGS) \
-           $(BOOT_CFLAGS) $(BOOT_RULES)
+CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(COMPILE_MODE) \
+            $(PROFILE_CFLAGS) $(RELEASE_CFLAGS) $(EXTRA_CFLAGS) \
+            $(WARN_CFLAGS) \
+            $(BOOT_CFLAGS) $(BOOT_RULES)
 
 # 32-bit u64 division requires libgcc's __udivdi3
 LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_start -Wl,-z,noexecstack -lgcc
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
+.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -350,6 +378,22 @@ allarch:
 	  $(MAKE) --no-print-directory ARCH=$$arch CC="$$cc" all; \
 	done
 
+print-profiles:
+	@echo "$(PROFILES)"
+
+release-profiles:
+	@set -e; \
+	for profile in $(PROFILES); do \
+	  echo "=== profile $$profile for $(ARCH)"; \
+	  $(MAKE) --no-print-directory ARCH="$(ARCH)" CC="$(CC)" \
+	          BUILD="$(PROFILE_BUILD_ROOT)/$$profile" PROFILE="$$profile" \
+	          RELEASE="$(RELEASE)" WERROR="$(WERROR)" all test-elf; \
+	done
+
+release-archive:
+	@ARCH="$(ARCH)" CC="$(CC)" RELEASE="$(RELEASE)" OUT="$(OUT)" \
+	  sh tools/package-release.sh
+
 clean:
 	@rm -rf build
 
@@ -370,3 +414,5 @@ help:
 	@echo "make check                          everything runnable here"
 	@echo "make check-all                      every installed toolchain and variant"
 	@echo "make allarch                        build every installed target"
+	@echo "make release-profiles ARCH=...      verify every release profile"
+	@echo "make release-archive ARCH=... RELEASE=YYYY.MM.DD  package one target"

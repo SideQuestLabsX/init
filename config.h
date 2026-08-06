@@ -1,5 +1,14 @@
 /* Included by init.c after its base types */
 
+/* build identity */
+
+#ifndef INIT_RELEASE
+  #define INIT_RELEASE "development"
+#endif
+#ifndef INIT_PROFILE_NAME
+  #define INIT_PROFILE_NAME "custom"
+#endif
+
 /* features */
 
 #ifndef FEATURE_CAPABILITY_DROP

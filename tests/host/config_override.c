@@ -6,6 +6,8 @@ typedef unsigned long long u64;
 #define NS_PER_MS 1000000ull
 #define NS_PER_SEC 1000000000ull
 
+#define INIT_RELEASE "override-release"
+#define INIT_PROFILE_NAME "override-profile"
 #define CFG_TASK_DIR "/override/tasks"
 #define CFG_LOG_PATH "/override/init.log"
 #define CFG_WATCHDOG_DEV "/override/watchdog"

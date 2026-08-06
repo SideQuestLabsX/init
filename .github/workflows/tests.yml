@@ -98,6 +98,8 @@ jobs:
         run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} WERROR=1
       - name: build
         run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} WERROR=1 all status-reader test-elf
+      - name: build release profiles
+        run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} RELEASE=ci WERROR=1 release-profiles
       - name: build without PIE
         if: matrix.arch == 'x86_64' && matrix.cc == 'gcc-14'
         run: make ARCH=x86_64 CC=gcc-14 BUILD=build/x86_64-nonpie PIE=0 WERROR=1 test-elf
