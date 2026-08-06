@@ -141,7 +141,7 @@ set -- "$@" \
     -kernel "$KERNEL" \
     -initrd "$BUILD/initramfs.cpio" \
     -append "console=$CONSOLE panic=1 loglevel=4" \
-    -nographic -serial mon:stdio -display none
+    -vga none -nographic -serial mon:stdio -display none
 "$@" > "$LOG" 2>&1 &
 QEMU_PID=$!
 QEMU_RC=0
