@@ -6,6 +6,7 @@ ARCH="${ARCH:-x86_64}"
 BUILD="${1:-${BUILD:-build/$ARCH}}"
 ROOTFS_STAGE="${2:-${ROOTFS_STAGE:-tools/stage-rootfs.sh}}"
 TIMEOUT="${TIMEOUT:-60}"
+profile="${PROFILE:-custom}"
 # WSL-mounted Windows drives and network shares may not provide atomic O_APPEND
 STAGE="${STAGE:-${TMPDIR:-/tmp}/init-nstest}"
 LOG="$BUILD/ns-console.log"
@@ -118,6 +119,16 @@ case "${FEATURE_VARIANT:-}" in
         logd_fixture=0
         ;;
 esac
+case "$profile" in
+    offline|offline-volatile|lean)
+        sntp_fixture=0
+        ;;
+esac
+case "$profile" in
+    volatile|offline-volatile|lean)
+        logd_fixture=0
+        ;;
+esac
 if [ "$log_symlink" -ne 0 ]; then
     logd_fixture=0
 fi
@@ -151,7 +162,8 @@ fi
 if [ "$netlink_test" -ne 0 ]; then
     MARKER_NETLINK=1
 fi
-if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ]; then
+if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ] ||
+   [ "$profile" = compressed ] || [ "$profile" = durable ]; then
     MARKER_CAPTURE=0
     MARKER_CHILD_ERROR=0
 fi

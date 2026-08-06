@@ -3,6 +3,7 @@ set -eu
 
 BUILD="${1:?usage: stage-rootfs.sh <build-dir> <stage-dir>}"
 STAGE="${2:?usage: stage-rootfs.sh <build-dir> <stage-dir>}"
+profile="${PROFILE:-custom}"
 
 if [ ! -x "$BUILD/init" ]; then
     echo "stage-rootfs: $BUILD/init not built" >&2
@@ -15,13 +16,9 @@ mkdir -p "$STAGE/dev" "$STAGE/proc" "$STAGE/run" "$STAGE/sys" "$STAGE/var/log" "
          "$STAGE/tasks/2s" "$STAGE/tasks/500ms" "$STAGE/tasks/1h" "$STAGE/tasks/3d" \
          "$STAGE/tasks/1d-03-30" "$STAGE/tasks/4d-03-30" "$STAGE/tasks/sun-04-00"
 
-case "${FEATURE_VARIANT:-}" in
-    FEATURE_NETLINK_EVENTS=0)
-        ;;
-    *)
-        mkdir -p "$STAGE/tasks/event-link" "$STAGE/tasks/event-address"
-        ;;
-esac
+if [ "${FEATURE_VARIANT:-}" != FEATURE_NETLINK_EVENTS=0 ] && [ "$profile" != lean ]; then
+    mkdir -p "$STAGE/tasks/event-link" "$STAGE/tasks/event-address"
+fi
 
 if [ "${INIT_STATUS_FALLBACK:-0}" -ne 0 ]; then
     rm -rf "$STAGE/run"
@@ -38,7 +35,8 @@ if [ "${INIT_LOG_SYMLINK:-0}" -ne 0 ]; then
     : > "$STAGE/dev/log-symlink-test"
 fi
 
-if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ]; then
+if [ "${FEATURE_VARIANT:-}" = FEATURE_LOG_COMPRESSION=1 ] ||
+   [ "$profile" = compressed ] || [ "$profile" = durable ]; then
     printf 'legacy-before-compression\n' > "$STAGE/var/log/init.log"
 fi
 

@@ -9,7 +9,7 @@ static bool FileExists(const char *path)
     return true;
 }
 
-#if FEATURE_EXEC_PROBES
+#if FEATURE_EXEC_PROBES || defined(FIXTURE_PROFILE_SMOKE)
 static bool FileContains(const char *path, const char *needle)
 {
     isize fd = SysOpen(path, O_RDONLY | O_CLOEXEC, 0);
@@ -39,6 +39,21 @@ static bool FileContains(const char *path, const char *needle)
     }
 
     SysClose((i32)fd);
+    return false;
+}
+#endif
+
+#if defined(FIXTURE_PROFILE_SMOKE)
+static bool WaitForProfileCompletion(void)
+{
+    for(usize i = 0; i < FIXTURE_WAIT_ATTEMPTS * 2u; i++)
+    {
+        if(FileContains("/dev/console", "stable: done") &&
+           FileContains("/dev/console", "flap: FAILED after") &&
+           FileContains("/dev/console", "FIXTURE tick fired"))
+            return true;
+        FixtureSleep(250ull * NS_PER_MS);
+    }
     return false;
 }
 #endif
@@ -237,6 +252,11 @@ void FixtureMain(void)
 #if !FEATURE_EXEC_PROBES && FEATURE_WATCHDOG
     if(!WaitForWatchdogPets())
         FixtureSay("FIXTURE watchdog completion incomplete");
+#endif
+
+#if defined(FIXTURE_PROFILE_SMOKE)
+    if(!WaitForProfileCompletion())
+        FixtureSay("FIXTURE profile completion incomplete");
 #endif
 
 #if defined(FIXTURE_LOG_FORMAT_DISABLED)

@@ -21,6 +21,7 @@ TARGET  := $(BUILD)/init
 CC      ?= gcc
 CC_ID   := $(notdir $(firstword $(CC)))
 PROFILE_BUILD_ROOT ?= build/profiles/$(ARCH)/$(CC_ID)/$(RELEASE)
+PROFILE_SMOKE_BUILD_ROOT ?= build/profile-smoke/$(ARCH)/$(CC_ID)
 
 ifneq ($(PROFILE),custom)
   ifeq ($(filter $(PROFILE),$(PROFILES)),)
@@ -141,7 +142,7 @@ LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_s
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
+.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants test-profile test-profiles abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -212,6 +213,7 @@ FIXTURE_BIN := $(patsubst tests/fixtures/%.c,$(BUILD)/fixtures/%,$(FIXTURE_SRC))
 FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -fno-pie \
                   -fno-stack-protector -fno-builtin -fno-common \
                   -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH) \
+                  $(PROFILE_CFLAGS) \
                   $(FIXTURE_EXTRA_CFLAGS) $(WARN_CFLAGS)
 FIXTURE_LDFLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start -Wl,-z,noexecstack
 # The pinned arm64 kernel uses 4 KiB pages
@@ -233,6 +235,7 @@ STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -fno-pie \
                          -Wall -Wextra -I. -DINIT_FIXTURE=1 \
                          -DINIT_STATUS_READER=1 -DFIXTURE_ENTRY=StatusReaderMain \
                          $(CFLAGS_ARCH) \
+                         $(PROFILE_CFLAGS) \
                          $(EXTRA_CFLAGS) $(WARN_CFLAGS)
 
 status-reader: $(STATUS_READER)
@@ -324,6 +327,7 @@ check-all: check
 		        CC="$$cc" abi-check all status-reader test-elf; \
 	done
 	@$(MAKE) --no-print-directory test-variants
+	@$(MAKE) --no-print-directory test-profiles
 
 test-variant:
 	$(if $(filter $(FEATURE_VARIANT),$(FEATURE_VARIANTS)),,$(error Unknown feature variant '$(FEATURE_VARIANT)'))
@@ -364,6 +368,36 @@ test-variants:
 	done
 	@$(MAKE) --no-print-directory BUILD=build/var PIE=0 all
 	@rm -rf build/var
+
+test-profile:
+	$(if $(filter $(PROFILE),$(PROFILES)),,$(error Unknown PROFILE '$(PROFILE)'. Use: $(PROFILES)))
+	@set -eu; \
+	profile='$(PROFILE)'; \
+	extra=''; \
+	fixture_extra='-DFIXTURE_PROFILE_SMOKE=1'; \
+	case "$$profile" in \
+	  persistent|durable) extra="$$extra -DFIXTURE_CLOCK_SET_SUCCESS=1" ;; \
+	esac; \
+	case "$$profile" in \
+	  compressed|durable) fixture_extra="$$fixture_extra -DFIXTURE_CAPTURE_DISABLED=1 -DFIXTURE_LOG_FORMAT_DISABLED=1" ;; \
+	esac; \
+	build="$(PROFILE_SMOKE_BUILD_ROOT)/$$profile"; \
+	rm -rf "$$build"; \
+	$(MAKE) --no-print-directory ARCH="$(ARCH)" CC="$(CC)" \
+	        BUILD="$$build" PROFILE="$$profile" RELEASE="$(RELEASE)" \
+	        BOOT_TEST=1 WERROR="$(WERROR)" \
+	        EXTRA_CFLAGS="$$extra" FIXTURE_EXTRA_CFLAGS="$$fixture_extra" \
+	        all fixtures; \
+	PROFILE="$$profile" RELEASE="$(RELEASE)" ARCH="$(ARCH)" \
+	INIT_NS_TIER="$(INIT_NS_TIER)" TIMEOUT="$(TIMEOUT)" \
+	sh tools/run-profile.sh "$$build"
+
+test-profiles:
+	@set -e; \
+	for profile in $(PROFILES); do \
+	  echo "=== profile behavior $$profile"; \
+	  $(MAKE) --no-print-directory PROFILE="$$profile" test-profile; \
+	done
 
 allarch:
 	@set -e; \
@@ -411,6 +445,8 @@ help:
 	@echo "make test-qemu-watchdog                  test hardware watchdog reset"
 	@echo "make test-variant FEATURE_VARIANT=  test one disabled feature"
 	@echo "make test-variants                  test every disabled feature"
+	@echo "make test-profile PROFILE=...       test one release profile"
+	@echo "make test-profiles                  test every release profile"
 	@echo "make check                          everything runnable here"
 	@echo "make check-all                      every installed toolchain and variant"
 	@echo "make allarch                        build every installed target"
