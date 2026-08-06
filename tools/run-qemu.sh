@@ -245,7 +245,8 @@ fi
 echo "checking markers:"
 export MARKER_ARCH
 export MARKER_SHUTDOWN_SIGNAL
-. tools/boot-markers.sh
+# shellcheck disable=SC1090
+. "${BOOT_MARKERS:-tools/boot-markers.sh}"
 
 if [ "$QEMU_COMPLETE" -eq 0 ]; then
     echo "  BAD   qemu exited before the reboot marker"

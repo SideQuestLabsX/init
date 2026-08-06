@@ -165,6 +165,55 @@ jobs:
       - name: run
         run: make test-profile ARCH=x86_64 CC=gcc-14 RELEASE=ci WERROR=1 PROFILE='${{ matrix.profile }}'
 
+  release-artifact:
+    name: packaged profile behavior
+    if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      INIT_TEST_REQUIRED: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install package and QEMU tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 uidmap qemu-system-x86 bc bison flex \
+            libelf-dev libssl-dev
+      - name: allow user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          user=$(id -un)
+          if ! grep -q "^${user}:" /etc/subuid; then
+            echo "${user}:100000:65536" | sudo tee -a /etc/subuid
+          fi
+          if ! grep -q "^${user}:" /etc/subgid; then
+            echo "${user}:100000:65536" | sudo tee -a /etc/subgid
+          fi
+      - name: restore pinned x86_64 kernel
+        id: kernel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/init-qemu-output-x86_64
+          key: qemu-kernel-${{ runner.os }}-x86_64-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
+      - name: build pinned x86_64 kernel
+        run: |
+          KERNEL_CC=gcc-14 \
+            QEMU_KERNEL_OUTPUT_DIR="$RUNNER_TEMP/init-qemu-output-x86_64" \
+            QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh x86_64
+      - name: package and run extracted profiles
+        run: |
+          release=$(date -u +%Y.%m.%d).1
+          archive="out/release/init-${release}-x86_64.tar.xz"
+          make ARCH=x86_64 CC=gcc-14 RELEASE="$release" OUT=out/release release-archive
+          make ARCH=x86_64 CC=gcc-14 RELEASE="$release" WERROR=1 \
+            RELEASE_ARCHIVE="$archive" test-release-profiles
+      - name: boot extracted profiles in QEMU
+        run: |
+          release=$(date -u +%Y.%m.%d).1
+          archive="out/release/init-${release}-x86_64.tar.xz"
+          make ARCH=x86_64 CC=gcc-14 RELEASE="$release" WERROR=1 \
+            RELEASE_ARCHIVE="$archive" test-release-profiles-qemu
+
   boot-namespace:
     name: namespace boot test (${{ matrix.tier }})
     if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}

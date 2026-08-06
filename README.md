@@ -146,6 +146,10 @@ make check-all
 | `make test-qemu-watchdog` | Hardware watchdog arm, keepalive, withheld pets and reset | x86_64 QEMU and a pinned kernel |
 | `make test-faults` | Syscall failure injection against a namespace boot | `unshare`, `timeout`, `strace`, unprivileged user namespaces |
 | `make test-variant FEATURE_VARIANT=...` | One feature build with behavior markers and syscall checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
+| `make test-profile PROFILE=...` | One named profile with runtime checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
+| `make test-profiles` | Every named profile with namespace runtime checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
+| `make test-release-profiles RELEASE_ARCHIVE=...` | Every extracted package profile with namespace checks | `tar`, `xz`, unprivileged user namespaces |
+| `make test-release-profiles-qemu RELEASE_ARCHIVE=...` | Every extracted package profile in x86_64 QEMU | QEMU and a pinned kernel image |
 | `make abi-check ARCH=...` | Hand-transcribed syscall and ABI constants against UAPI headers | Target kernel headers |
 
 Runtime harnesses report a skip when namespace, QEMU or kernel prerequisites are

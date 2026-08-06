@@ -22,6 +22,8 @@ CC      ?= gcc
 CC_ID   := $(notdir $(firstword $(CC)))
 PROFILE_BUILD_ROOT ?= build/profiles/$(ARCH)/$(CC_ID)/$(RELEASE)
 PROFILE_SMOKE_BUILD_ROOT ?= build/profile-smoke/$(ARCH)/$(CC_ID)
+RELEASE_SMOKE_BUILD_ROOT ?= build/release-smoke/$(ARCH)/$(CC_ID)
+RELEASE_PROFILE_RUNNER ?= namespace
 
 ifneq ($(PROFILE),custom)
   ifeq ($(filter $(PROFILE),$(PROFILES)),)
@@ -142,7 +144,7 @@ LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_s
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants test-profile test-profiles abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
+.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants test-profile test-profiles test-release-profile test-release-profile-qemu test-release-profiles test-release-profiles-qemu abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -399,6 +401,42 @@ test-profiles:
 	  $(MAKE) --no-print-directory PROFILE="$$profile" test-profile; \
 	done
 
+test-release-profile:
+	$(if $(filter $(PROFILE),$(PROFILES)),,$(error Unknown PROFILE '$(PROFILE)'. Use: $(PROFILES)))
+	$(if $(RELEASE_ARCHIVE),,$(error RELEASE_ARCHIVE is required))
+	@set -eu; \
+	profile='$(PROFILE)'; \
+	fixture_extra='-UFEATURE_EXEC_PROBES -DFEATURE_EXEC_PROBES=0 -UFEATURE_LOG_CAPTURE -DFEATURE_LOG_CAPTURE=0 -DFIXTURE_CAPTURE_DISABLED=1'; \
+	case "$$profile" in \
+	  compressed|durable) fixture_extra="$$fixture_extra -DFIXTURE_LOG_FORMAT_DISABLED=1" ;; \
+	esac; \
+	build="$(RELEASE_SMOKE_BUILD_ROOT)/$$profile"; \
+	rm -rf "$$build"; \
+	$(MAKE) --no-print-directory ARCH="$(ARCH)" CC="$(CC)" \
+	        BUILD="$$build" PROFILE="$$profile" RELEASE="$(RELEASE)" \
+	        BOOT_TEST=1 WERROR="$(WERROR)" \
+	        FIXTURE_EXTRA_CFLAGS="$$fixture_extra" fixtures; \
+	PROFILE="$$profile" ARCH="$(ARCH)" INIT_NS_TIER="$(INIT_NS_TIER)" \
+	RUNNER="$(RELEASE_PROFILE_RUNNER)" TIMEOUT="$(TIMEOUT)" sh tools/run-release-profile.sh \
+	        "$(RELEASE_ARCHIVE)" "$$profile" "$$build"
+
+test-release-profile-qemu: RELEASE_PROFILE_RUNNER=qemu
+test-release-profile-qemu: test-release-profile
+
+test-release-profiles:
+	@set -e; \
+	for profile in $(PROFILES); do \
+	  echo "=== release artifact behavior $$profile"; \
+	  $(MAKE) --no-print-directory PROFILE="$$profile" test-release-profile; \
+	done
+
+test-release-profiles-qemu:
+	@set -e; \
+	for profile in $(PROFILES); do \
+	  echo "=== release artifact QEMU behavior $$profile"; \
+	  $(MAKE) --no-print-directory PROFILE="$$profile" test-release-profile-qemu; \
+	done
+
 allarch:
 	@set -e; \
 	for spec in $(ARCH_CC_SPECS); do \
@@ -447,6 +485,10 @@ help:
 	@echo "make test-variants                  test every disabled feature"
 	@echo "make test-profile PROFILE=...       test one release profile"
 	@echo "make test-profiles                  test every release profile"
+	@echo "make test-release-profile PROFILE=... RELEASE_ARCHIVE=...  test an extracted profile"
+	@echo "make test-release-profiles RELEASE_ARCHIVE=...              test every extracted profile"
+	@echo "make test-release-profile-qemu PROFILE=... RELEASE_ARCHIVE=...  boot one extracted profile in QEMU"
+	@echo "make test-release-profiles-qemu RELEASE_ARCHIVE=...              boot every extracted profile in QEMU"
 	@echo "make check                          everything runnable here"
 	@echo "make check-all                      every installed toolchain and variant"
 	@echo "make allarch                        build every installed target"
