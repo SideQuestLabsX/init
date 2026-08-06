@@ -1,3 +1,5 @@
+# shellcheck shell=sh
+
 case "$FEATURE_VARIANT" in
     OFFLINE_MODE=1)
         MARKER_SNTP=0

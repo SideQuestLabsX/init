@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2034
 set -eu
 
 ARCH="${ARCH:-x86_64}"
@@ -36,6 +37,10 @@ unavailable()
 {
     if [ -n "$requested_tier" ]; then
         echo "ERROR: namespace tier '$requested_tier' is unavailable: $1"
+        exit 1
+    fi
+    if [ "${INIT_TEST_REQUIRED:-0}" -ne 0 ]; then
+        echo "ERROR: $1" >&2
         exit 1
     fi
     record_result skip
@@ -180,8 +185,7 @@ fi
 set +e
 if [ "$remount_test" -ne 0 ]; then
     if ! command -v strace >/dev/null 2>&1; then
-        echo "SKIP: strace is required for the remount test"
-        exit 0
+        unavailable "strace is required for the remount test"
     fi
     MOUNT_TRACE="$BUILD/ns-mount.trace"
     rm -f "$MOUNT_TRACE"
@@ -246,6 +250,7 @@ if [ "$status_fallback" -ne 0 ] && [ -e "$STAGE/run/init.status" ]; then
     echo "  BAD   status fallback left a file"
     fail=1
 fi
+# shellcheck disable=SC1090
 . "${BOOT_MARKERS:-tools/boot-markers.sh}"
 
 if [ "$remount_test" -ne 0 ]; then

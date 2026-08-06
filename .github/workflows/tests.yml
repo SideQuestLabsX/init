@@ -9,16 +9,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     name: host unit tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         include:
           - cc: gcc-14
-            pkg: gcc-14
+            pkg: gcc-14 shellcheck
           # Clang lists the sanitizer runtime as Recommends
           - cc: clang-18
             pkg: clang-18 libclang-rt-18-dev
@@ -27,11 +35,18 @@ jobs:
       - name: install compiler
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkg }}
       - name: run
-        run: make test HOST_CC=${{ matrix.cc }}
+        run: make test HOST_CC=${{ matrix.cc }} WERROR=1
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      - name: lint shell scripts
+        if: matrix.cc == 'gcc-14'
+        run: make lint
 
   build:
-    name: build ${{ matrix.arch }}
+    name: build ${{ matrix.arch }} with ${{ matrix.cc }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +54,9 @@ jobs:
           - arch: x86_64
             cc: gcc-14
             pkgs: gcc-14
+          - arch: x86_64
+            cc: clang-18
+            pkgs: clang-18
           - arch: x86
             cc: gcc-14
             pkgs: gcc-14-multilib
@@ -68,18 +86,21 @@ jobs:
       - name: install toolchain
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkgs }}
       - name: abi check
-        run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+        run: make abi-check ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} WERROR=1
       - name: build
-        run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} all status-reader
+        run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} WERROR=1 all status-reader test-elf
       - name: build without PIE
-        if: matrix.arch == 'x86_64'
-        run: make ARCH=x86_64 CC=gcc-14 BUILD=build/x86_64-nonpie PIE=0
+        if: matrix.arch == 'x86_64' && matrix.cc == 'gcc-14'
+        run: make ARCH=x86_64 CC=gcc-14 BUILD=build/x86_64-nonpie PIE=0 WERROR=1 test-elf
       - name: size
         run: size build/${{ matrix.arch }}/init
 
   variants:
     name: behavior with ${{ matrix.variant }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      INIT_TEST_REQUIRED: 1
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +114,8 @@ jobs:
           - FEATURE_TASK_DISCOVERY=0
           - FEATURE_NETLINK_EVENTS=0
           - FEATURE_PERSIST_SCHEDULE=1
+          - FEATURE_STATIC_TASKS=1
+          - FEATURE_LOG_COMPRESSION=1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: install compiler and tracing tools
@@ -100,11 +123,14 @@ jobs:
       - name: allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
-        run: make test-variant CC=gcc-14 FEATURE_VARIANT='${{ matrix.variant }}'
+        run: make test-variant CC=gcc-14 WERROR=1 FEATURE_VARIANT='${{ matrix.variant }}'
 
   boot-namespace:
     name: namespace boot test (${{ matrix.tier }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      INIT_TEST_REQUIRED: 1
     strategy:
       fail-fast: false
       matrix:
@@ -127,51 +153,76 @@ jobs:
       - name: allow user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: run
-        run: make test-ns ARCH=x86_64 CC=gcc-14 INIT_NS_TIER=${{ matrix.tier }}
+        run: make test-ns ARCH=x86_64 CC=gcc-14 WERROR=1 INIT_NS_TIER=${{ matrix.tier }}
       - name: run fault injection
         if: matrix.tier == 'caps'
-        run: make test-faults ARCH=x86_64 CC=gcc-14
+        run: make test-faults ARCH=x86_64 CC=gcc-14 WERROR=1
 
   boot-qemu-watchdog:
     name: qemu hardware watchdog reset
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install qemu, the compiler and kernel build tools
+      - name: restore pinned watchdog kernel
+        id: kernel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/init-qemu-output-x86_64-watchdog
+          key: qemu-kernel-${{ runner.os }}-x86_64-watchdog-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
+      - name: install qemu and the compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex gcc-14 \
-            libelf-dev libssl-dev qemu-system-x86
+          sudo apt-get install -y gcc-14 qemu-system-x86
+      - name: install kernel build tools
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y bc bison flex libelf-dev libssl-dev
       - name: build the pinned watchdog kernel
         run: |
           QEMU_WATCHDOG=1 KERNEL_CC=gcc-14 \
+            QEMU_KERNEL_OUTPUT_DIR="$RUNNER_TEMP/init-qemu-output-x86_64-watchdog" \
             QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh x86_64
       - name: run
-        run: make test-qemu-watchdog ARCH=x86_64 CC=gcc-14
+        run: make test-qemu-watchdog ARCH=x86_64 CC=gcc-14 WERROR=1
         env:
+          INIT_TEST_REQUIRED: 1
           TIMEOUT: 30
 
   boot-qemu-mips:
     name: qemu boot test (mips)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: restore pinned kernel
+        id: kernel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/init-qemu-output-mips
+          key: qemu-kernel-${{ runner.os }}-mips-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison flex gcc-14-mips-linux-gnu \
-            gcc-mips-linux-gnu \
-            libelf-dev libssl-dev qemu-system-mips
+          sudo apt-get install -y gcc-14-mips-linux-gnu qemu-system-mips
+      - name: install kernel build tools
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y bc bison flex gcc-mips-linux-gnu \
+            libelf-dev libssl-dev
       - name: build the pinned Malta kernel
-        run: QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh mips
+        run: |
+          QEMU_KERNEL_OUTPUT_DIR="$RUNNER_TEMP/init-qemu-output-mips" \
+            QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh mips
       - name: run
-        run: make test-qemu ARCH=mips CC=mips-linux-gnu-gcc-14
+        run: make test-qemu ARCH=mips CC=mips-linux-gnu-gcc-14 WERROR=1
         env:
+          INIT_TEST_REQUIRED: 1
           TIMEOUT: 300
 
   boot-qemu:
     name: qemu boot test (${{ matrix.arch }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -179,34 +230,52 @@ jobs:
           - arch: x86_64
             cc: gcc-14
             packages: gcc-14 qemu-system-x86
+            kernel_packages: ''
           - arch: x86
             cc: gcc-14
             packages: gcc-14-multilib qemu-system-x86
+            kernel_packages: ''
           - arch: aarch64
             cc: aarch64-linux-gnu-gcc-14
-            packages: gcc-aarch64-linux-gnu gcc-14-aarch64-linux-gnu qemu-system-arm
+            packages: gcc-14-aarch64-linux-gnu qemu-system-arm
+            kernel_packages: gcc-aarch64-linux-gnu
           - arch: armv6
             cc: arm-linux-gnueabihf-gcc-14
-            packages: gcc-arm-linux-gnueabihf gcc-14-arm-linux-gnueabihf qemu-system-arm
+            packages: gcc-14-arm-linux-gnueabihf qemu-system-arm
+            kernel_packages: gcc-arm-linux-gnueabihf
           - arch: armv7
             cc: arm-linux-gnueabihf-gcc-14
-            packages: gcc-arm-linux-gnueabihf gcc-14-arm-linux-gnueabihf qemu-system-arm
+            packages: gcc-14-arm-linux-gnueabihf qemu-system-arm
+            kernel_packages: gcc-arm-linux-gnueabihf
           - arch: riscv64
             cc: riscv64-linux-gnu-gcc-14
-            packages: gcc-riscv64-linux-gnu gcc-14-riscv64-linux-gnu qemu-system-misc
+            packages: gcc-14-riscv64-linux-gnu qemu-system-misc
+            kernel_packages: gcc-riscv64-linux-gnu
           - arch: loongarch64
             cc: loongarch64-linux-gnu-gcc-14
             packages: gcc-14-loongarch64-linux-gnu qemu-system-misc
+            kernel_packages: ''
           - arch: mipsel
             cc: mipsel-linux-gnu-gcc-14
-            packages: gcc-mipsel-linux-gnu gcc-14-mipsel-linux-gnu qemu-system-mips
+            packages: gcc-14-mipsel-linux-gnu qemu-system-mips
+            kernel_packages: gcc-mipsel-linux-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: restore pinned kernel
+        id: kernel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/init-qemu-output-${{ matrix.arch }}
+          key: qemu-kernel-${{ runner.os }}-${{ matrix.arch }}-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+      - name: install kernel build tools
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: |
           sudo apt-get install -y bc bison flex libelf-dev libssl-dev \
-            ${{ matrix.packages }}
+            ${{ matrix.kernel_packages }}
       - name: fetch LoongArch firmware
         if: matrix.arch == 'loongarch64'
         run: |
@@ -218,8 +287,11 @@ jobs:
           echo "f55fbf5d92e885844631ae9bfa8887f659bbb4f6ef2beea9e9ff8bc0603b6697  $firmware" | sha256sum -c -
           echo "BIOS=$firmware" >> "$GITHUB_ENV"
       - name: build the pinned kernel
-        run: QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh "${{ matrix.arch }}"
+        run: |
+          QEMU_KERNEL_OUTPUT_DIR="$RUNNER_TEMP/init-qemu-output-${{ matrix.arch }}" \
+            QEMU_KERNEL_ENV="$GITHUB_ENV" sh tools/build-qemu-kernel.sh "${{ matrix.arch }}"
       - name: run
-        run: make test-qemu ARCH=${{ matrix.arch }} CC=${{ matrix.cc }}
+        run: make test-qemu ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} WERROR=1
         env:
+          INIT_TEST_REQUIRED: 1
           TIMEOUT: 300

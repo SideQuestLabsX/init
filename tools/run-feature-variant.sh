@@ -10,15 +10,23 @@ runtime_trace="$BUILD/variant-runtime.strace"
 cpu="$BUILD/variant.cpu"
 result="$BUILD/variant.namespace"
 
+Unavailable()
+{
+    if [ "${INIT_TEST_REQUIRED:-0}" -ne 0 ]; then
+        echo "ERROR: $1" >&2
+        exit 1
+    fi
+    echo "SKIP: $1"
+    exit 0
+}
+
 if ! command -v strace >/dev/null 2>&1
 then
-    echo "SKIP: strace is required for feature behavior tests"
-    exit 0
+    Unavailable "strace is required for feature behavior tests"
 fi
 if ! test -x /usr/bin/time
 then
-    echo "SKIP: /usr/bin/time is required for feature behavior tests"
-    exit 0
+    Unavailable "/usr/bin/time is required for feature behavior tests"
 fi
 
 rm -f "$result"
@@ -35,8 +43,7 @@ inotify_init1,inotify_add_watch,inotify_rm_watch \
        sh tools/run-namespace.sh "$BUILD" tools/stage-feature-variant.sh
 
 if [ "$(cat "$result" 2>/dev/null || true)" = skip ]; then
-    echo "SKIP: feature behavior test needs a working user namespace"
-    exit 0
+    Unavailable "feature behavior test needs a working user namespace"
 fi
 
 init_line=$(grep -nF 'execve("/init"' "$trace" | head -n 1 || true)

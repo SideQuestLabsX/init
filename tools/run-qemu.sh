@@ -10,6 +10,16 @@ KERNEL="${KERNEL:-}"
 DTB="${DTB:-}"
 BIOS="${BIOS:-}"
 
+Unavailable()
+{
+    if [ "${INIT_TEST_REQUIRED:-0}" -ne 0 ]; then
+        echo "ERROR: $1" >&2
+        exit 1
+    fi
+    echo "SKIP: $1"
+    exit 0
+}
+
 unset MARKER_LOGD MARKER_NS_TIER MARKER_CHILD_ERROR MARKER_PROBES \
       MARKER_LOGFILE MARKER_CAPTURE MARKER_SNTP MARKER_STATUS \
       MARKER_STATUS_FALLBACK MARKER_DISCOVERY MARKER_NAMESPACE \
@@ -19,48 +29,49 @@ MARKER_ARCH="$ARCH"
 MARKER_SHUTDOWN_SIGNAL=10
 NEEDS_DTB=0
 NEEDS_BIOS=0
+CPU=
 
 case "$ARCH" in
     x86)
-        QEMU=qemu-system-i386; MACHINE="-machine q35"; CONSOLE=ttyS0
+        QEMU=qemu-system-i386; MACHINE=q35; CONSOLE=ttyS0
         ;;
-    x86_64) QEMU=qemu-system-x86_64; MACHINE="-machine q35"; CONSOLE=ttyS0 ;;
+    x86_64) QEMU=qemu-system-x86_64; MACHINE=q35; CONSOLE=ttyS0 ;;
     aarch64)
-        QEMU=qemu-system-aarch64; MACHINE="-machine virt -cpu cortex-a57"; CONSOLE=ttyAMA0
+        QEMU=qemu-system-aarch64; MACHINE=virt; CPU=cortex-a57; CONSOLE=ttyAMA0
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     armv6)
-        QEMU=qemu-system-arm; MACHINE="-machine realview-eb -cpu arm1136"; CONSOLE=ttyAMA0
+        QEMU=qemu-system-arm; MACHINE=realview-eb; CPU=arm1136; CONSOLE=ttyAMA0
         MARKER_ARCH=arm
         NEEDS_DTB=1
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     armv7)
-        QEMU=qemu-system-arm; MACHINE="-machine virt,highmem=off -cpu cortex-a15"; CONSOLE=ttyAMA0
+        QEMU=qemu-system-arm; MACHINE=virt,highmem=off; CPU=cortex-a15; CONSOLE=ttyAMA0
         MARKER_ARCH=arm
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     riscv64)
-        QEMU=qemu-system-riscv64; MACHINE="-machine virt"; CONSOLE=ttyS0
+        QEMU=qemu-system-riscv64; MACHINE=virt; CONSOLE=ttyS0
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     loongarch64)
-        QEMU=qemu-system-loongarch64; MACHINE="-machine virt -cpu la464"; CONSOLE=ttyS0
+        QEMU=qemu-system-loongarch64; MACHINE=virt; CPU=la464; CONSOLE=ttyS0
         NEEDS_BIOS=1
         MEMORY="${MEMORY:-2G}"
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     mips)
-        QEMU=qemu-system-mips; MACHINE="-machine malta"; CONSOLE=ttyS0
+        QEMU=qemu-system-mips; MACHINE=malta; CONSOLE=ttyS0
         MARKER_SHUTDOWN_SIGNAL=16
         TIMEOUT="${TIMEOUT:-300}"
         ;;
     mipsel)
-        QEMU=qemu-system-mipsel; MACHINE="-machine malta"; CONSOLE=ttyS0
+        QEMU=qemu-system-mipsel; MACHINE=malta; CONSOLE=ttyS0
         MARKER_SHUTDOWN_SIGNAL=16
         TIMEOUT="${TIMEOUT:-300}"
         ;;
-    *) echo "SKIP: no qemu boot test for ARCH=$ARCH"; exit 0 ;;
+    *) Unavailable "no qemu boot test for ARCH=$ARCH" ;;
 esac
 
 if [ "$WATCHDOG_TEST" -ne 0 ] && [ "$ARCH" != x86_64 ]; then
@@ -72,12 +83,10 @@ TIMEOUT="${TIMEOUT:-90}"
 MEMORY="${MEMORY:-256}"
 
 if ! command -v "$QEMU" >/dev/null 2>&1; then
-    echo "SKIP: $QEMU not installed"
-    exit 0
+    Unavailable "$QEMU not installed"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "SKIP: python3 not installed (needed to pack the initramfs)"
-    exit 0
+    Unavailable "python3 not installed (needed to pack the initramfs)"
 fi
 
 if [ -z "$KERNEL" ]; then
@@ -91,34 +100,32 @@ if [ -z "$KERNEL" ]; then
             done
             ;;
         x86)
-            echo "SKIP: x86 boot requires a 32-bit kernel; set KERNEL=/path/to/vmlinuz"
-            exit 0
+            Unavailable "x86 boot requires a 32-bit kernel; set KERNEL=/path/to/vmlinuz"
             ;;
         *)
-            echo "SKIP: $ARCH boot requires an explicit kernel image"
-            exit 0
+            Unavailable "$ARCH boot requires an explicit kernel image"
             ;;
     esac
 fi
 if [ -z "$KERNEL" ] || [ ! -r "$KERNEL" ]; then
-    echo "SKIP: no readable kernel image; set KERNEL=/path/to/vmlinuz"
-    exit 0
+    Unavailable "no readable kernel image; set KERNEL=/path/to/vmlinuz"
 fi
 if [ "$NEEDS_DTB" -ne 0 ] && { [ -z "$DTB" ] || [ ! -r "$DTB" ]; }; then
-    echo "SKIP: $ARCH boot requires a readable DTB; set DTB=/path/to/board.dtb"
-    exit 0
+    Unavailable "$ARCH boot requires a readable DTB; set DTB=/path/to/board.dtb"
 fi
 if [ "$NEEDS_BIOS" -ne 0 ] && { [ -z "$BIOS" ] || [ ! -r "$BIOS" ]; }; then
-    echo "SKIP: $ARCH boot requires a readable UEFI firmware; set BIOS=/path/to/QEMU_EFI.fd"
-    exit 0
+    Unavailable "$ARCH boot requires a readable UEFI firmware; set BIOS=/path/to/QEMU_EFI.fd"
 fi
 
-INIT_WATCHDOG_TEST="$WATCHDOG_TEST" \
-    BUILD="$BUILD" OUT="$BUILD/initramfs.cpio" sh tools/mkinitramfs.sh
+env INIT_WATCHDOG_TEST="$WATCHDOG_TEST" BUILD="$BUILD" \
+    OUT="$BUILD/initramfs.cpio" sh tools/mkinitramfs.sh
 
 echo "booting $KERNEL under $QEMU"
 set +e
-set -- "$QEMU" $MACHINE -m "$MEMORY"
+set -- "$QEMU" -machine "$MACHINE" -m "$MEMORY"
+if [ -n "$CPU" ]; then
+    set -- "$@" -cpu "$CPU"
+fi
 if [ -n "$BIOS" ]; then
     set -- "$@" -bios "$BIOS"
 fi

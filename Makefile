@@ -67,6 +67,11 @@ endif
 
 # Build-time policy belongs in config.h
 EXTRA_CFLAGS ?=
+WERROR ?= 0
+WARN_CFLAGS :=
+ifeq ($(WERROR),1)
+  WARN_CFLAGS := -Werror
+endif
 
 # Boot tests replace task rules and shorten writer timing
 BOOT_SNTP_SERVER ?= 127.0.0.1
@@ -98,6 +103,7 @@ ifeq ($(WATCHDOG_TEST),1)
 endif
 
 CFLAGS  := $(CFLAGS_COMMON) $(CFLAGS_ARCH) $(LINKMODE) $(EXTRA_CFLAGS) \
+           $(WARN_CFLAGS) \
            $(BOOT_CFLAGS) $(BOOT_RULES)
 
 # 32-bit u64 division requires libgcc's __udivdi3
@@ -105,7 +111,7 @@ LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_s
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all test test-config-overrides test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
+.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants abi-check fixtures status-reader allarch help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -130,12 +136,13 @@ $(BUILD):
 # INIT_HOSTED excludes syscall code for native sanitizer tests
 HOST_CC    ?= cc
 PYTHON     ?= python3
+READELF    ?= readelf
 HOST_BUILD := build/host
 HOST_SRC   := tests/host/test_main.c
 HOST_DEPS  := tests/host/test_main.c init.c $(CONFIG_DEPS)
 HOST_CFLAGS := -std=c11 -g -O1 -I. \
                -Wall -Wextra -Wshadow -Wconversion \
-               -DINIT_HOSTED=1 -fno-builtin -pthread
+               -DINIT_HOSTED=1 -fno-builtin -pthread $(WARN_CFLAGS)
 
 SANITIZE ?= 1
 ifeq ($(SANITIZE),1)
@@ -147,6 +154,12 @@ test: test-config-overrides test-log-reader $(HOST_BUILD)/unit
 
 test-log-reader:
 	$(PYTHON) tools/test-log-read.py
+
+test-elf: $(TARGET)
+	READELF="$(READELF)" sh tools/check-elf.sh "$(TARGET)"
+
+lint:
+	shellcheck tools/*.sh
 
 test-config-overrides: | $(HOST_BUILD)
 	$(HOST_CC) -std=c11 -I. -Werror -c tests/host/config_override.c \
@@ -160,7 +173,7 @@ $(HOST_BUILD):
 
 # Pin transcribed ABI constants against target UAPI headers
 abi-check: | $(BUILD)
-	$(CC) $(CFLAGS_ARCH) -std=c11 -I. -DINIT_ABI_ONLY=1 -Wall -Wextra \
+	$(CC) $(CFLAGS_ARCH) -std=c11 -I. -DINIT_ABI_ONLY=1 -Wall -Wextra $(WARN_CFLAGS) \
 	      -c tests/abi/abi_check.c -o $(BUILD)/abi_check.o
 	@echo "abi ok for $(ARCH)"
 
@@ -169,7 +182,7 @@ FIXTURE_BIN := $(patsubst tests/fixtures/%.c,$(BUILD)/fixtures/%,$(FIXTURE_SRC))
 FIXTURE_CFLAGS := -std=c11 -O1 -nostdlib -ffreestanding -static -no-pie \
                   -fno-stack-protector -fno-builtin -fno-common \
                   -Wall -Wextra -I. -DINIT_FIXTURE=1 $(CFLAGS_ARCH) \
-                  $(FIXTURE_EXTRA_CFLAGS)
+                  $(FIXTURE_EXTRA_CFLAGS) $(WARN_CFLAGS)
 FIXTURE_LDFLAGS := -nostdlib -static -no-pie -Wl,-e,_start -Wl,-z,noexecstack
 # The pinned arm64 kernel uses 4 KiB pages
 ifeq ($(ARCH),aarch64)
@@ -190,7 +203,7 @@ STATUS_READER_CFLAGS := -std=c11 -O2 -nostdlib -ffreestanding -static -no-pie \
                          -Wall -Wextra -I. -DINIT_FIXTURE=1 \
                          -DINIT_STATUS_READER=1 -DFIXTURE_ENTRY=StatusReaderMain \
                          $(CFLAGS_ARCH) \
-                         $(EXTRA_CFLAGS)
+                         $(EXTRA_CFLAGS) $(WARN_CFLAGS)
 
 status-reader: $(STATUS_READER)
 
@@ -240,7 +253,7 @@ test-faults:
 
 check:
 	$(MAKE) --no-print-directory test
-	$(MAKE) --no-print-directory ARCH=$(ARCH) abi-check all
+	$(MAKE) --no-print-directory ARCH=$(ARCH) abi-check all test-elf
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-ns
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-faults
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-qemu
@@ -278,7 +291,7 @@ check-all: check
 		fi; \
 		echo "=== check $$arch with $$cc"; \
 		$(MAKE) --no-print-directory ARCH=$$arch BUILD=build/check-$$arch \
-		        CC="$$cc" abi-check all status-reader; \
+		        CC="$$cc" abi-check all status-reader test-elf; \
 	done
 	@$(MAKE) --no-print-directory test-variants
 
@@ -342,7 +355,9 @@ help:
 	@echo "ARCH is one of: $(ARCHES)"
 	@echo "make [ARCH=...]                     build init"
 	@echo "make test                           host unit tests"
+	@echo "make lint                           check shell scripts"
 	@echo "make abi-check ARCH=...             verify syscall numbers"
+	@echo "make test-elf ARCH=...              verify static ELF properties"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
 	@echo "make test-faults                    fault-injected child and clock tests"
 	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"

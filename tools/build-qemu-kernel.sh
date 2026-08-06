@@ -16,6 +16,7 @@ DEFCONFIG=
 BUILD_TARGETS=
 KERNEL_FILE=
 DTB_FILE=
+KERNEL_OUTPUT_DIR="${QEMU_KERNEL_OUTPUT_DIR:-}"
 
 case "$ARCH" in
     x86)
@@ -86,9 +87,36 @@ case "$ARCH" in
         ;;
 esac
 
+PublishKernel()
+{
+    if [ -n "${QEMU_KERNEL_ENV:-}" ]; then
+        printf 'KERNEL=%s\n' "$KERNEL_FILE" >> "$QEMU_KERNEL_ENV"
+        if [ -n "$DTB_FILE" ]; then
+            printf 'DTB=%s\n' "$DTB_FILE" >> "$QEMU_KERNEL_ENV"
+        fi
+    else
+        printf '%s\n' "$KERNEL_FILE"
+    fi
+}
+
 if [ "${QEMU_WATCHDOG:-0}" -ne 0 ] && [ "$ARCH" != x86_64 ]; then
     echo "QEMU watchdog kernel requires ARCH=x86_64" >&2
     exit 2
+fi
+
+if [ -n "$KERNEL_OUTPUT_DIR" ]; then
+    CACHED_KERNEL="$KERNEL_OUTPUT_DIR/kernel"
+    CACHED_DTB=
+    if [ -n "$DTB_FILE" ]; then
+        CACHED_DTB="$KERNEL_OUTPUT_DIR/board.dtb"
+    fi
+    if [ -r "$CACHED_KERNEL" ] && { [ -z "$CACHED_DTB" ] || [ -r "$CACHED_DTB" ]; }; then
+        KERNEL_FILE="$CACHED_KERNEL"
+        DTB_FILE="$CACHED_DTB"
+        echo "using cached QEMU kernel for $ARCH" >&2
+        PublishKernel
+        exit 0
+    fi
 fi
 
 KERNEL_CC="${KERNEL_CC:-${CROSS_COMPILE}gcc}"
@@ -149,6 +177,7 @@ make -C "$KERNEL_SOURCE" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
 make -C "$KERNEL_SOURCE" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
     CC="$KERNEL_CC" \
     olddefconfig >&2
+# shellcheck disable=SC2086
 make -C "$KERNEL_SOURCE" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
     CC="$KERNEL_CC" \
     -j"${KERNEL_JOBS:-$(nproc)}" $BUILD_TARGETS >&2
@@ -157,11 +186,13 @@ if [ -n "$DTB_FILE" ]; then
     test -r "$DTB_FILE"
 fi
 
-if [ -n "${QEMU_KERNEL_ENV:-}" ]; then
-    printf 'KERNEL=%s\n' "$KERNEL_FILE" >> "$QEMU_KERNEL_ENV"
+if [ -n "$KERNEL_OUTPUT_DIR" ]; then
+    mkdir -p "$KERNEL_OUTPUT_DIR"
+    cp "$KERNEL_FILE" "$KERNEL_OUTPUT_DIR/kernel"
     if [ -n "$DTB_FILE" ]; then
-        printf 'DTB=%s\n' "$DTB_FILE" >> "$QEMU_KERNEL_ENV"
+        cp "$DTB_FILE" "$KERNEL_OUTPUT_DIR/board.dtb"
+        DTB_FILE="$KERNEL_OUTPUT_DIR/board.dtb"
     fi
-else
-    printf '%s\n' "$KERNEL_FILE"
+    KERNEL_FILE="$KERNEL_OUTPUT_DIR/kernel"
 fi
+PublishKernel

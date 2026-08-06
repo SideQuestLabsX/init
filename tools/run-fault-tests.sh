@@ -3,18 +3,26 @@ set -eu
 
 BUILD="${1:?usage: run-fault-tests.sh <build-dir>}"
 
+Unavailable()
+{
+    if [ "${INIT_TEST_REQUIRED:-0}" -ne 0 ]; then
+        echo "ERROR: $1" >&2
+        exit 1
+    fi
+    echo "SKIP: $1"
+    exit 0
+}
+
 if ! command -v unshare >/dev/null 2>&1 ||
    ! command -v timeout >/dev/null 2>&1 ||
    ! command -v strace >/dev/null 2>&1
 then
-    echo "SKIP: unshare, timeout and strace are required for fault tests"
-    exit 0
+    Unavailable "unshare, timeout and strace are required for fault tests"
 fi
 
 if ! unshare --user --map-root-user true 2>/dev/null
 then
-    echo "SKIP: unprivileged user namespaces are unavailable"
-    exit 0
+    Unavailable "unprivileged user namespaces are unavailable"
 fi
 
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/init-fault-tests.XXXXXX")

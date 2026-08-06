@@ -287,7 +287,7 @@ static bool FloodInotify(void)
         return false;
     }
 
-    i32 pids[INOTIFY_FLOOD_WORKERS];
+    i32 pids[INOTIFY_FLOOD_WORKERS] = { 0 };
     usize spawned = 0;
     bool bOk = true;
     for(u32 i = 0; i < INOTIFY_FLOOD_WORKERS; i++)

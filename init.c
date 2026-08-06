@@ -2729,7 +2729,7 @@ static inline isize SysAccess(const char *path, i32 mode)
 static inline isize SysStatx(const char *path, u32 mask, KStatx *out)
 {
     return SysCall5(SYS_statx, AT_FDCWD, (isize)path, AT_STATX_SYNC_AS_STAT,
-                    mask, (isize)out);
+                    (isize)mask, (isize)out);
 }
 
 static inline isize SysGetdents64(i32 fd, void *buf, usize n)

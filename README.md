@@ -111,6 +111,8 @@ make check-all
 | Command | Coverage | Requirements |
 |---|---|---|
 | `make test` | Parsers, arena, ring, backoff, `/proc` parsing and SNTP packets under ASan/UBSan | C compiler |
+| `make lint` | Shell harness static analysis | ShellCheck |
+| `make test-elf` | Static linkage, stack permissions and entry symbol | `readelf` |
 | `make test-ns` | The binary as PID 1 in user, PID and mount namespaces | `unshare`, unprivileged user namespaces |
 | `make test-qemu` | Base boot fixtures on a real kernel, including `devtmpfs` and `reboot(2)` | QEMU and a kernel image |
 | `make test-qemu-watchdog` | Hardware watchdog arm, keepalive, withheld pets and reset | x86_64 QEMU and a pinned kernel |
@@ -125,9 +127,11 @@ and ABI-checks installed cross-toolchains, then runs feature variants.
 On Windows, `tools/test.ps1` runs host tests, an x86_64 build and namespace tests
 through WSL. Without WSL, it runs native host tests.
 
-CI builds and ABI-checks all nine targets and runs a QEMU boot test for each
-against a pinned Linux 6.1.75 kernel it builds from source. A separate job builds
-its own pinned x86_64 kernel for a real hardware watchdog reset test.
+CI builds and ABI-checks all nine targets, builds the production binary with GCC
+and Clang and runs every feature variant. Each target runs the full QEMU boot
+test against a pinned Linux 6.1.75 kernel generated from source. CI caches only
+the final kernel outputs. A separate x86_64 kernel covers a real hardware
+watchdog reset test.
 
 ## Watchdog and shutdown
 
