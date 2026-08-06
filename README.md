@@ -131,7 +131,8 @@ CI builds and ABI-checks all nine targets, builds the production binary with GCC
 and Clang and runs every feature variant. Each target runs the full QEMU boot
 test against a pinned Linux 6.1.75 kernel generated from source. CI caches only
 the final kernel outputs. A separate x86_64 kernel covers a real hardware
-watchdog reset test.
+watchdog reset test. A weekly QEMU-only run rebuilds every kernel without cache.
+The `rebuild_kernels` manual workflow input starts the same check.
 
 ## Watchdog and shutdown
 

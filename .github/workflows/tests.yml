@@ -7,18 +7,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
   workflow_dispatch:
+    inputs:
+      rebuild_kernels:
+        description: Build every QEMU kernel without cache
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.event_name }}-${{ inputs.rebuild_kernels && 'cold' || 'normal' }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   unit:
     name: host unit tests
+    if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -45,6 +53,7 @@ jobs:
 
   build:
     name: build ${{ matrix.arch }} with ${{ matrix.cc }}
+    if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -97,6 +106,7 @@ jobs:
 
   variants:
     name: behavior with ${{ matrix.variant }}
+    if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -127,6 +137,7 @@ jobs:
 
   boot-namespace:
     name: namespace boot test (${{ matrix.tier }})
+    if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -165,6 +176,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned watchdog kernel
+        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -195,6 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned kernel
+        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -262,6 +275,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned kernel
+        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
