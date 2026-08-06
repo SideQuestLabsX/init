@@ -284,7 +284,8 @@ jobs:
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
+          sudo apt-get install -y --no-install-recommends ipxe-qemu \
+            ${{ matrix.packages }}
       - name: install kernel build tools
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: |
