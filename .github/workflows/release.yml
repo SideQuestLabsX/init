@@ -102,7 +102,7 @@ jobs:
       - name: build package
         run: make ARCH=${{ matrix.arch }} CC=${{ matrix.cc }} RELEASE=${{ needs.prepare.outputs.release }} OUT=out/release release-archive
       - name: upload package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.arch }}
           path: out/release/*.tar.xz
@@ -118,7 +118,7 @@ jobs:
       contents: write
     steps:
       - name: download packages
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*
           path: dist
@@ -137,6 +137,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ needs.prepare.outputs.release }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_NOTES: |
+            Prebuilt static PID 1 binaries for all supported architectures.
+
+            Each architecture bundle includes these profiles and a matching `init-status` reader:
+
+            | Profile | Use |
+            |---|---|
+            | `standard` | Shipped defaults |
+            | `offline` | No runtime SNTP networking |
+            | `volatile` | No disk logging |
+            | `offline-volatile` | No runtime SNTP networking or disk logging |
+            | `compressed` | Checksummed LZ4-framed disk logs |
+            | `persistent` | Reboot-persistent interval schedules |
+            | `durable` | Persistent schedules and compressed disk logs |
+            | `lean` | Offline supervision with optional subsystems removed |
+
+            Install the selected `init-<profile>` executable as `/bin/init`. Verify downloads with `SHA256SUMS`.
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             if [[ $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
@@ -146,7 +163,8 @@ jobs:
             fi
           else
             gh release create "$TAG" --draft --generate-notes --title "$RELEASE" \
-              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+              --notes "$RELEASE_NOTES" --target "$GITHUB_SHA" \
+              --repo "$GITHUB_REPOSITORY"
           fi
 
           gh release upload "$TAG" dist/*.tar.xz dist/SHA256SUMS --clobber \

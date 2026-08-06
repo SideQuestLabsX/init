@@ -126,6 +126,9 @@ metadata and profile definitions. Released executables report their release and
 profile in the startup message. Install the selected `init-<profile>` executable
 as `/bin/init`.
 
+Published releases are immutable and include a GitHub attestation. Verify one
+with `gh release verify v2026.08.06 --repo SideQuestLabsX/init`.
+
 ## Test
 
 ```sh
