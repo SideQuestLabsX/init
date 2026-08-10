@@ -124,6 +124,7 @@ else
   BOOT_RULES :=
   CONFIG_DEPS := config.h
 endif
+CONFIG_DEPS += $(EXTRA_CONFIG_DEPS)
 ifneq ($(PROFILE_HEADER),)
   CONFIG_DEPS += $(PROFILE_HEADER)
 endif
@@ -144,7 +145,7 @@ LDFLAGS := -nostdlib $(LINKMODE) $(LINKER_PIE_FLAGS) -Wl,--gc-sections -Wl,-e,_s
 
 OBJ := $(BUILD)/init.o $(BUILD)/start.o
 
-.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-qemu test-qemu-watchdog test-variant test-variants test-profile test-profiles test-release-profile test-release-profile-qemu test-release-profiles test-release-profiles-qemu abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
+.PHONY: all clean check check-all lint test test-config-overrides test-elf test-log-reader test-ns test-faults test-mount-table test-qemu test-qemu-watchdog test-variant test-variants test-profile test-profiles test-release-profile test-release-profile-qemu test-release-profiles test-release-profiles-qemu abi-check fixtures status-reader allarch release-profiles release-archive print-profiles help
 .DEFAULT_GOAL := all
 
 all: $(TARGET)
@@ -194,7 +195,7 @@ test-elf: $(TARGET)
 lint:
 	shellcheck tools/*.sh
 
-test-config-overrides: | $(HOST_BUILD)
+test-config-overrides: tests/host/config_mounts.h | $(HOST_BUILD)
 	$(HOST_CC) -std=c11 -I. -Werror -c tests/host/config_override.c \
 	           -o $(HOST_BUILD)/config_override.o
 
@@ -250,6 +251,8 @@ $(STATUS_READER): tools/init-status.c tests/fixtures/fstart.S init.c armv6-div.S
 QEMU_BUILD ?= build/$(ARCH)-qemu
 WATCHDOG_QEMU_BUILD ?= build/$(ARCH)-watchdog-qemu
 NS_BUILD   ?= build/$(ARCH)-ns
+MOUNT_TEST_BUILD ?= build/$(ARCH)-mount-test
+MOUNT_FAIL_BUILD ?= build/$(ARCH)-mount-fail
 NS_ROOTFS  ?= tools/stage-rootfs.sh
 
 test-qemu:
@@ -286,11 +289,24 @@ test-faults:
 	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(NS_BUILD) BOOT_TEST=1 all fixtures
 	ARCH=$(ARCH) sh tools/run-fault-tests.sh "$(NS_BUILD)"
 
+test-mount-table:
+	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(MOUNT_TEST_BUILD) BOOT_TEST=1 \
+	        EXTRA_CFLAGS="-DINIT_MOUNT_TABLE_H='\"tests/fixtures/mount_table_success.h\"'" \
+	        EXTRA_CONFIG_DEPS="tests/fixtures/mount_table_success.h" \
+	        all "$(MOUNT_TEST_BUILD)/fixtures/task_mount_shutdown"
+	$(MAKE) --no-print-directory ARCH=$(ARCH) BUILD=$(MOUNT_FAIL_BUILD) BOOT_TEST=1 \
+	        EXTRA_CFLAGS="-DINIT_MOUNT_TABLE_H='\"tests/fixtures/mount_table_required_failure.h\"'" \
+	        EXTRA_CONFIG_DEPS="tests/fixtures/mount_table_required_failure.h" \
+	        all "$(MOUNT_FAIL_BUILD)/fixtures/task_mount_shutdown"
+	ARCH=$(ARCH) sh tools/run-mount-table-tests.sh \
+	        "$(MOUNT_TEST_BUILD)" "$(MOUNT_FAIL_BUILD)"
+
 check:
 	$(MAKE) --no-print-directory test
 	$(MAKE) --no-print-directory ARCH=$(ARCH) abi-check all test-elf
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-ns
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-faults
+	$(MAKE) --no-print-directory ARCH=$(ARCH) test-mount-table
 	$(MAKE) --no-print-directory ARCH=$(ARCH) test-qemu
 
 FEATURE_VARIANTS ?= OFFLINE_MODE=1 FEATURE_WATCHDOG=0 FEATURE_EXEC_PROBES=0 \
@@ -478,6 +494,7 @@ help:
 	@echo "make test-elf ARCH=...              verify static ELF properties"
 	@echo "make test-ns [INIT_NS_TIER=...]     boot test in a namespace"
 	@echo "make test-faults                    fault-injected child and clock tests"
+	@echo "make test-mount-table               custom and required mount tests"
 	@echo "make status-reader [ARCH=...]       build the /run/init.status reader"
 	@echo "make test-qemu ARCH=x86|x86_64|aarch64  boot test under qemu"
 	@echo "make test-qemu-watchdog                  test hardware watchdog reset"

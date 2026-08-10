@@ -84,6 +84,13 @@ configuration file. Immutable images can define `FEATURE_STATIC_TASKS=1` and
 provide `INIT_STATIC_TASKS_H` with a NULL-terminated `STATIC_TASKS` table. This
 loads only the compiled task list and disables runtime discovery.
 
+Early filesystems come from the compiled `MOUNT_TABLE`. A build can define
+`INIT_MOUNT_TABLE_H` as the quoted path of a header that provides a replacement
+`static const MountSpec MOUNT_TABLE[]`. Entries run in table order. Init creates
+missing target directories with mode 0755. `data` passes filesystem options to
+`mount(2)`, and a failed entry with `bRequired` set enters the panic path. The
+replacement table must include any default mounts that the image still needs.
+
 Release builds provide named profiles:
 
 | Profile | Behavior |
@@ -145,6 +152,7 @@ make check-all
 | `make test-qemu` | Base boot fixtures on a real kernel, including `devtmpfs` and `reboot(2)` | QEMU and a kernel image |
 | `make test-qemu-watchdog` | Hardware watchdog arm, keepalive, withheld pets and reset | x86_64 QEMU and a pinned kernel |
 | `make test-faults` | Syscall failure injection against a namespace boot | `unshare`, `timeout`, `strace`, unprivileged user namespaces |
+| `make test-mount-table` | Custom mount order, options, target creation and required failures | `unshare`, `timeout`, `strace`, unprivileged user namespaces |
 | `make test-variant FEATURE_VARIANT=...` | One feature build with behavior markers and syscall checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
 | `make test-profile PROFILE=...` | One named profile with runtime checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |
 | `make test-profiles` | Every named profile with namespace runtime checks | `strace`, `/usr/bin/time`, unprivileged user namespaces |

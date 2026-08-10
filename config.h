@@ -62,6 +62,30 @@ typedef struct
 
 /* paths */
 
+typedef struct
+{
+    const char *src;
+    const char *tgt;
+    const char *fs;
+    u32 flags;
+    const char *data;
+    bool bRequired;
+} MountSpec;
+
+#if !defined(INIT_HOSTED) && !defined(INIT_FIXTURE)
+#ifdef INIT_MOUNT_TABLE_H
+  #include INIT_MOUNT_TABLE_H
+#else
+static const MountSpec MOUNT_TABLE[] =
+{
+    { "devtmpfs", "/dev", "devtmpfs", MS_NOSUID, NULL, false },
+    { "proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL, false },
+    { "sysfs", "/sys", "sysfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL, false },
+    { "tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL, false },
+};
+#endif
+#endif
+
 #ifndef CFG_TASK_DIR
   #define CFG_TASK_DIR      "/tasks"
 #endif

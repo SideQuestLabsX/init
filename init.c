@@ -6718,21 +6718,62 @@ static void SignalSetup(KSigSet *outUnblocked)
 
 /* early boot */
 
-static bool MountOne(const char *src, const char *tgt, const char *fs, u32 flags)
+static isize MountTargetEnsure(const char *tgt)
 {
-    SysMkdir(tgt, 0755);
-    isize r = SysMount(src, tgt, fs, flags, NULL);
+    char path[CFG_PATH_MAX];
+    if(tgt[0] != '/' || !StrCopyOk(path, sizeof(path), tgt))
+        return -EINVAL;
+
+    for(usize i = 1; path[i] != '\0'; i++)
+    {
+        if(path[i] != '/')
+            continue;
+
+        path[i] = '\0';
+        isize r = SysMkdir(path, 0755);
+        path[i] = '/';
+        if(r < 0 && r != -EEXIST)
+            return r;
+    }
+
+    isize r = SysMkdir(path, 0755);
+    return r == -EEXIST ? 0 : r;
+}
+
+static bool MountOne(const MountSpec *mount)
+{
+    const char *fs = mount->fs != NULL ? mount->fs : "(none)";
+    isize r = MountTargetEnsure(mount->tgt);
+    if(r < 0)
+    {
+        LogF("mount target %s create failed (%d)", mount->tgt, (i32)r);
+        return false;
+    }
+
+    r = SysMount(mount->src, mount->tgt, mount->fs, mount->flags, mount->data);
     if(r < 0 && r != -EBUSY)
-        LogF("mount %s on %s failed (%d)", fs, tgt, (i32)r);
+        LogF("mount %s on %s failed (%d)", fs, mount->tgt, (i32)r);
     return r >= 0 || r == -EBUSY;
 }
 
 static bool MountEarly(void)
 {
-    MountOne("devtmpfs", "/dev", "devtmpfs", MS_NOSUID);
-    MountOne("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC);
-    MountOne("sysfs", "/sys", "sysfs", MS_NOSUID | MS_NODEV | MS_NOEXEC);
-    return MountOne("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC);
+    bool bRunMounted = false;
+    for(usize i = 0; i < ARRAY_LEN(MOUNT_TABLE); i++)
+    {
+        const MountSpec *mount = &MOUNT_TABLE[i];
+        bool bMounted = MountOne(mount);
+        if(bMounted && StrEq(mount->tgt, "/run"))
+            bRunMounted = true;
+        if(!bMounted && mount->bRequired)
+        {
+            char msg[CFG_PATH_MAX];
+            Fmt(msg, sizeof(msg), "required mount %s on %s failed",
+                mount->fs != NULL ? mount->fs : "(none)", mount->tgt);
+            InitPanic(msg);
+        }
+    }
+    return bRunMounted;
 }
 
 static i32 OpenConsole(void)

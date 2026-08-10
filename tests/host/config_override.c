@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 typedef unsigned char u8;
 typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -53,10 +55,11 @@ typedef unsigned long long u64;
 #define CFG_SNTP_TIMEOUT_NS (4ull * NS_PER_SEC)
 #define CFG_STDOUT_POLICY 1u
 #define CFG_STDERR_POLICY 2u
+#define INIT_MOUNT_TABLE_H "tests/host/config_mounts.h"
 
 #include "../../config.h"
 
 int ConfigOverrideProbe(void)
 {
-    return TASK_RULES[0].name != NULL;
+    return TASK_RULES[0].name != NULL || !MOUNT_TABLE[0].bRequired;
 }
