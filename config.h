@@ -44,6 +44,9 @@
 #ifndef FEATURE_NETLINK_EVENTS
   #define FEATURE_NETLINK_EVENTS 1
 #endif
+#ifndef FEATURE_SET_HOSTNAME
+  #define FEATURE_SET_HOSTNAME 1
+#endif
 #if FEATURE_STATIC_TASKS
   #undef FEATURE_TASK_DISCOVERY
   #define FEATURE_TASK_DISCOVERY 0
@@ -94,6 +97,9 @@ static const MountSpec MOUNT_TABLE[] =
 #endif
 #ifndef CFG_WATCHDOG_DEV
   #define CFG_WATCHDOG_DEV  "/dev/watchdog"
+#endif
+#ifndef CFG_HOSTNAME_PATH
+  #define CFG_HOSTNAME_PATH "/etc/hostname"
 #endif
 
 /* 0 keeps the log writer as root */
@@ -278,6 +284,10 @@ _Static_assert(LOGP_IS_ROUTE(CFG_STDERR_POLICY),
 /* task overrides */
 
 #define RULE_CRITICAL 0x1u   /* gates watchdog petting */
+/* Skips no_new_privs and bounding-set reduction so descendants can use setuid
+   binaries, which means capMask stops being a ceiling for that task's
+   descendants: a setuid-root exec regains every capability */
+#define RULE_ALLOW_ESCALATION 0x2u
 
 #define CAP_BIT(n) (1ull << (n))
 

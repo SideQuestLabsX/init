@@ -72,6 +72,7 @@ typedef unsigned long usize;
   #define SYS_setsid          112
   #define SYS_capset          126
   #define SYS_prctl           157
+  #define SYS_sethostname     170
   #define SYS_sync            162
   #define SYS_mount           165
   #define SYS_umount2         166
@@ -133,6 +134,7 @@ typedef unsigned long usize;
   #define SYS_setsid          66
   #define SYS_capset          185
   #define SYS_prctl           172
+  #define SYS_sethostname     74
   #define SYS_sync            36
   #define SYS_mount           21
   #define SYS_umount2         52
@@ -201,6 +203,7 @@ typedef unsigned long usize;
   #define SYS_setsid          157
   #define SYS_capset          91
   #define SYS_prctl           167
+  #define SYS_sethostname     161
   #define SYS_sync            81
   #define SYS_mount           40
   #define SYS_umount2         39
@@ -275,6 +278,7 @@ typedef unsigned long usize;
   #define SYS_setsid          66
   #define SYS_capset          185
   #define SYS_prctl           172
+  #define SYS_sethostname     74
   #define SYS_sync            36
   #define SYS_mount           21
   #define SYS_umount2         52
@@ -340,6 +344,7 @@ typedef unsigned long usize;
   #define SYS_setsid          4066
   #define SYS_capset          4205
   #define SYS_prctl           4192
+  #define SYS_sethostname     4074
   #define SYS_sync            4036
   #define SYS_mount           4021
   #define SYS_umount2         4052
@@ -644,6 +649,9 @@ typedef struct
     u32 permitted;
     u32 inheritable;
 } KCapData;
+
+/* uts */
+#define UTS_NAME_MAX 64   /* kernel __NEW_UTS_LEN */
 
 /* reboot */
 #define LINUX_REBOOT_MAGIC1     0xfee1deadu
@@ -2791,6 +2799,11 @@ static inline isize SysMount(const char *src, const char *tgt, const char *fs,
                              u32 flags, const void *data)
 { return SysCall5(SYS_mount, (isize)src, (isize)tgt, (isize)fs, (isize)(usize)flags, (isize)data); }
 
+#if FEATURE_SET_HOSTNAME
+static inline isize SysSetHostname(const char *name, usize n)
+{ return SysCall2(SYS_sethostname, (isize)name, (isize)n); }
+#endif
+
 static inline isize SysSync(void)
 { return SysCall0(SYS_sync); }
 
@@ -3109,6 +3122,7 @@ typedef struct
     u32  gid;
     u64  capMask;
     bool bCritical;
+    bool bAllowEscalation;
     u32  maxRestarts;
     u64  stableNs;
     u64  probeIntervalNs;
@@ -3296,7 +3310,7 @@ NORETURN void ChildFail(const char *step, isize result);
 void ChildCheck(const char *step, isize result);
 void ChildDup(const char *step, i32 oldFd, i32 newFd);
 void ChildPrepare(void);
-void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask);
+void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask, bool bAllowEscalation);
 i32  SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t);
 
 /* directory listing */
@@ -3448,18 +3462,21 @@ void ChildPrepare(void)
     ChildCheck("sigprocmask", SysSigProcMask(SIG_SETMASK, &none, NULL));
 }
 
-void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
+void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask, bool bAllowEscalation)
 {
 #if FEATURE_CAPABILITY_DROP
     /* Order is no_new_privs, bounding set, ids, capset then ambient set */
-    ChildCheck("PR_SET_NO_NEW_PRIVS",
-               SysPrctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
-
-    for(u32 cap = 0; cap <= CAP_LAST_CAP; cap++)
+    if(!bAllowEscalation)
     {
-        if((capMask & (1ull << cap)) == 0)
-            ChildCheck("PR_CAPBSET_DROP",
-                       SysPrctl(PR_CAPBSET_DROP, cap, 0, 0, 0));
+        ChildCheck("PR_SET_NO_NEW_PRIVS",
+                   SysPrctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+
+        for(u32 cap = 0; cap <= CAP_LAST_CAP; cap++)
+        {
+            if((capMask & (1ull << cap)) == 0)
+                ChildCheck("PR_CAPBSET_DROP",
+                           SysPrctl(PR_CAPBSET_DROP, cap, 0, 0, 0));
+        }
     }
 
     bool bDropping = uid != 0;
@@ -3499,6 +3516,7 @@ void ChildApplyPrivileges(u32 uid, u32 gid, u64 capMask)
                    SysPrctl(PR_SET_KEEPCAPS, 0, 0, 0, 0));
 #else
     UNUSED(capMask);
+    UNUSED(bAllowEscalation);
     if(uid != 0 || gid != 0)
     {
         ChildCheck("setgroups", SysSetGroups(0, NULL));
@@ -3532,7 +3550,7 @@ i32 SpawnChild(const char *path, i32 outFd, i32 errFd, const Task *t)
         ChildDup("dup3 stderr", errFd, 2);
 
     if(t != NULL)
-        ChildApplyPrivileges(t->uid, t->gid, t->capMask);
+        ChildApplyPrivileges(t->uid, t->gid, t->capMask, t->bAllowEscalation);
 
     char argv0[CFG_PATH_MAX];
     StrCopy(argv0, sizeof(argv0), path);
@@ -3552,6 +3570,7 @@ static void TaskApplyRule(Task *t)
     t->gid = r != NULL ? r->gid : 0;
     t->capMask = r != NULL ? r->capMask : 0;
     t->bCritical = r != NULL && (r->flags & RULE_CRITICAL) != 0;
+    t->bAllowEscalation = r != NULL && (r->flags & RULE_ALLOW_ESCALATION) != 0;
 
     t->maxRestarts = (r != NULL && r->maxRestarts != 0) ? r->maxRestarts : CFG_MAX_RESTARTS;
     t->stableNs = (r != NULL && r->stableNs != 0) ? r->stableNs : CFG_STABLE_NS;
@@ -4109,6 +4128,7 @@ static bool TaskSpecEqual(const Task *a, const Task *b)
            a->gid == b->gid &&
            a->capMask == b->capMask &&
            a->bCritical == b->bCritical &&
+           a->bAllowEscalation == b->bAllowEscalation &&
            a->maxRestarts == b->maxRestarts &&
            a->stableNs == b->stableNs &&
            a->probeIntervalNs == b->probeIntervalNs &&
@@ -6207,7 +6227,7 @@ NORETURN void LogWriterMain(InitState *st)
     SysMkdir("/var/log", 0755);
 
 #if CFG_LOGD_UID != 0
-    ChildApplyPrivileges(CFG_LOGD_UID, CFG_LOGD_UID, 0);
+    ChildApplyPrivileges(CFG_LOGD_UID, CFG_LOGD_UID, 0, false);
 #endif
 
     static LogdState ls;
@@ -6776,6 +6796,34 @@ static bool MountEarly(void)
     return bRunMounted;
 }
 
+#if FEATURE_SET_HOSTNAME
+static void HostnameApply(void)
+{
+    isize fd = SysOpen(CFG_HOSTNAME_PATH, O_RDONLY | O_CLOEXEC, 0);
+    if(fd < 0)
+        return;
+
+    char name[UTS_NAME_MAX + 1];
+    isize n = SysRead((i32)fd, name, UTS_NAME_MAX);
+    SysClose((i32)fd);
+    if(n <= 0)
+        return;
+
+    usize len = (usize)n;
+    while(len != 0 && (u8)name[len - 1] <= ' ')
+        len--;
+    if(len == 0)
+        return;
+    name[len] = '\0';
+
+    isize r = SysSetHostname(name, len);
+    if(r < 0)
+        LogF("hostname %s from %s failed (%d)", name, CFG_HOSTNAME_PATH, (i32)r);
+    else
+        LogF("hostname %s", name);
+}
+#endif
+
 static i32 OpenConsole(void)
 {
     /* O_APPEND preserves ordering when a harness uses a regular file */
@@ -7253,6 +7301,10 @@ void InitMain(void)
     LogAttach(st->ring, st->consoleFd);
     LogF("init " INIT_ARCH_NAME " starting, pid %d, release %s, profile %s",
          (i32)SysGetPid(), INIT_RELEASE, INIT_PROFILE_NAME);
+
+#if FEATURE_SET_HOSTNAME
+    HostnameApply();
+#endif
 
     void *statusMem = MapStatus(bRunMounted);
     if(statusMem != NULL)

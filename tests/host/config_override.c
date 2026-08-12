@@ -13,6 +13,8 @@ typedef unsigned long long u64;
 #define CFG_TASK_DIR "/override/tasks"
 #define CFG_LOG_PATH "/override/init.log"
 #define CFG_WATCHDOG_DEV "/override/watchdog"
+#define CFG_HOSTNAME_PATH "/override/hostname"
+#define FEATURE_SET_HOSTNAME 0
 #define FEATURE_PERSIST_SCHEDULE 1
 #define FEATURE_TASK_DISCOVERY 0
 #define FEATURE_LOG_COMPRESSION 1

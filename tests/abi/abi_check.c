@@ -16,6 +16,7 @@
 #include <linux/socket.h>
 #include <linux/stat.h>
 #include <linux/time.h>
+#include <linux/utsname.h>
 #include <linux/watchdog.h>
 #include <asm/signal.h>
 
@@ -78,6 +79,7 @@ enum
     K_PR_CAP_AMBIENT  = PR_CAP_AMBIENT,
     K_PR_CAP_AMB_RAISE = PR_CAP_AMBIENT_RAISE,
     K_CAP_LAST_CAP    = CAP_LAST_CAP,
+    K_NEW_UTS_LEN     = __NEW_UTS_LEN,
     K_CLOCK_REALTIME  = CLOCK_REALTIME,
     K_CLOCK_BOOTTIME  = CLOCK_BOOTTIME,
     K_IN_ACCESS       = IN_ACCESS,
@@ -345,6 +347,7 @@ SAME(SYS_umask, __NR_umask);
 SAME(SYS_setsid, __NR_setsid);
 SAME(SYS_capset, __NR_capset);
 SAME(SYS_prctl, __NR_prctl);
+SAME(SYS_sethostname, __NR_sethostname);
 SAME(SYS_sync, __NR_sync);
 SAME(SYS_mount, __NR_mount);
 SAME(SYS_umount2, __NR_umount2);
@@ -466,6 +469,7 @@ SAME(PR_SET_NO_NEW_PRIVS, K_PR_SET_NNP);
 SAME(PR_CAP_AMBIENT, K_PR_CAP_AMBIENT);
 SAME(PR_CAP_AMBIENT_RAISE, K_PR_CAP_AMB_RAISE);
 SAME(CAP_LAST_CAP, K_CAP_LAST_CAP);
+SAME(UTS_NAME_MAX, K_NEW_UTS_LEN);
 
 SAME(CLOCK_REALTIME, K_CLOCK_REALTIME);
 SAME(CLOCK_BOOTTIME, K_CLOCK_BOOTTIME);
