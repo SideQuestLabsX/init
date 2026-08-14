@@ -18,6 +18,8 @@
 #include <linux/time.h>
 #include <linux/utsname.h>
 #include <linux/watchdog.h>
+#include <linux/if.h>
+#include <linux/sockios.h>
 #include <asm/signal.h>
 
 /* Preserve UAPI values before init.c redefines their names */
@@ -119,6 +121,13 @@ enum
     K_SOCKADDR_NL_GROUPS_OFFSET = offsetof(struct sockaddr_nl, nl_groups),
     K_NLMSG_HDR_SIZE = sizeof(struct nlmsghdr),
     K_NLMSG_HDR_TYPE_OFFSET = offsetof(struct nlmsghdr, nlmsg_type),
+    K_IFREQ_SIZE = sizeof(struct ifreq),
+    K_IFREQ_NAME_OFFSET = offsetof(struct ifreq, ifr_name),
+    K_IFREQ_FLAGS_OFFSET = offsetof(struct ifreq, ifr_ifru.ifru_flags),
+    K_IFNAMSIZ = IFNAMSIZ,
+    K_IFF_UP = IFF_UP,
+    K_SIOCGIFFLAGS = SIOCGIFFLAGS,
+    K_SIOCSIFFLAGS = SIOCSIFFLAGS,
     K_STATX_SIZE_MASK = STATX_SIZE,
     K_STATX_MTIME_MASK = STATX_MTIME,
     K_STATX_CTIME_MASK = STATX_CTIME,
@@ -198,6 +207,10 @@ enum
 #undef RTM_DELADDR
 #undef NLMSG_ALIGNTO
 #undef NLMSG_HDRLEN
+#undef IFNAMSIZ
+#undef IFF_UP
+#undef SIOCGIFFLAGS
+#undef SIOCSIFFLAGS
 #undef AT_FDCWD
 #undef AT_STATX_SYNC_AS_STAT
 #undef STATX_MTIME
@@ -512,6 +525,16 @@ SAME(offsetof(KSockAddrNl, pid), K_SOCKADDR_NL_PID_OFFSET);
 SAME(offsetof(KSockAddrNl, groups), K_SOCKADDR_NL_GROUPS_OFFSET);
 SAME(sizeof(KNlMsgHdr), K_NLMSG_HDR_SIZE);
 SAME(offsetof(KNlMsgHdr, type), K_NLMSG_HDR_TYPE_OFFSET);
+
+#ifdef IFNAMSIZ
+SAME(IFNAMSIZ, K_IFNAMSIZ);
+SAME(IFF_UP, K_IFF_UP);
+SAME(SIOCGIFFLAGS, K_SIOCGIFFLAGS);
+SAME(SIOCSIFFLAGS, K_SIOCSIFFLAGS);
+SAME(sizeof(KIfReq), K_IFREQ_SIZE);
+SAME(offsetof(KIfReq, name), K_IFREQ_NAME_OFFSET);
+SAME(offsetof(KIfReq, ifru.flags), K_IFREQ_FLAGS_OFFSET);
+#endif
 
 /* These constants exceed enum width on 32-bit targets */
 int AbiCheckWide(void);

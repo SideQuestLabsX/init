@@ -803,6 +803,29 @@ _Static_assert(offsetof(KNlMsgHdr, type) == 4, "netlink message type offset chan
 #define NETLINK_EVENT_LINK    0x1u
 #define NETLINK_EVENT_ADDRESS 0x2u
 
+/* network interface configuration via ioctl */
+
+#define IFNAMSIZ      16
+#define IFF_UP        0x0001u
+#define SIOCGIFFLAGS  0x8913u
+#define SIOCSIFFLAGS  0x8914u
+
+/* Sized to cover struct ifru_map, the widest ifreq union member, on 32-bit and 64-bit */
+typedef struct
+{
+    char name[IFNAMSIZ];
+    union
+    {
+        u16          flags;
+        u8           sockaddr[16];
+        unsigned long ifmap[3];
+    } ifru;
+} KIfReq;
+
+_Static_assert(offsetof(KIfReq, name) == 0, "KIfReq name offset changed");
+_Static_assert(offsetof(KIfReq, ifru.flags) == IFNAMSIZ,
+               "KIfReq flags offset changed");
+
 /* watchdog ioctls */
 
 /* MIPS uses a different ioctl direction encoding for _IOR */
@@ -2774,7 +2797,7 @@ static inline isize SysFcntl(i32 fd, i32 cmd, isize arg)
 { return SysCall3(SYS_fcntl, fd, cmd, arg); }
 #endif
 
-#if FEATURE_WATCHDOG
+#if FEATURE_WATCHDOG || FEATURE_LOOPBACK_UP
 static inline isize SysIoctl(i32 fd, u32 req, isize arg)
 { return SysCall3(SYS_ioctl, fd, (isize)(usize)req, arg); }
 #endif
@@ -6824,6 +6847,46 @@ static void HostnameApply(void)
 }
 #endif
 
+#if FEATURE_LOOPBACK_UP && !OFFLINE_MODE
+static void LoopbackBringUp(void)
+{
+    isize fd = SysSocket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if(fd < 0)
+    {
+        LogF("loopback up: socket failed (%d)", (i32)fd);
+        return;
+    }
+
+    KIfReq req;
+    memset(&req, 0, sizeof(req));
+    static const char kLoName[] = {'l', 'o', '\0'};
+    memcpy(req.name, kLoName, sizeof(kLoName));
+
+    isize r = SysIoctl((i32)fd, SIOCGIFFLAGS, (isize)&req);
+    if(r < 0)
+    {
+        LogF("loopback up: get flags failed (%d)", (i32)r);
+        SysClose((i32)fd);
+        return;
+    }
+
+    if((req.ifru.flags & IFF_UP) == IFF_UP)
+    {
+        SysClose((i32)fd);
+        LogF("loopback up: already up");
+        return;
+    }
+
+    req.ifru.flags |= IFF_UP;
+    r = SysIoctl((i32)fd, SIOCSIFFLAGS, (isize)&req);
+    SysClose((i32)fd);
+    if(r < 0)
+        LogF("loopback up: set flags failed (%d)", (i32)r);
+    else
+        LogF("loopback up");
+}
+#endif
+
 static i32 OpenConsole(void)
 {
     /* O_APPEND preserves ordering when a harness uses a regular file */
@@ -7334,6 +7397,10 @@ void InitMain(void)
     TaskLoadStatic(st);
 #else
     TaskScanAll(st);
+#endif
+#if FEATURE_LOOPBACK_UP && !OFFLINE_MODE
+    /* Run after netlink arms so a fresh-namespace lo-up notification drives event-link */
+    LoopbackBringUp();
 #endif
 
     st->sntpNextNs = SysBootNs();

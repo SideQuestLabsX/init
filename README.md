@@ -84,6 +84,12 @@ configuration file. Immutable images can define `FEATURE_STATIC_TASKS=1` and
 provide `INIT_STATIC_TASKS_H` with a NULL-terminated `STATIC_TASKS` table. This
 loads only the compiled task list and disables runtime discovery.
 
+`FEATURE_LOOPBACK_UP` brings the loopback interface up at boot through an
+`SIOCSIFFLAGS` ioctl, mirroring `ip link set lo up`. It is on for online builds
+and off when `OFFLINE_MODE` is set. Init runs the ioctl after netlink arms and
+before the event loop. A fresh network namespace where `lo` starts down drives
+an `event-link` task from the link notification.
+
 Early filesystems come from the compiled `MOUNT_TABLE`. A build can define
 `INIT_MOUNT_TABLE_H` as the quoted path of a header that provides a replacement
 `static const MountSpec MOUNT_TABLE[]`. Entries run in table order. Init creates
