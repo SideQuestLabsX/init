@@ -8,7 +8,7 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: '17 3 * * 1'
+    - cron: '17 3 1 * *'
   workflow_dispatch:
     inputs:
       rebuild_kernels:
@@ -255,12 +255,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned watchdog kernel
-        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
+        if: ${{ inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/init-qemu-output-x86_64-watchdog
           key: qemu-kernel-${{ runner.os }}-x86_64-watchdog-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
+          restore-keys: |
+            qemu-kernel-${{ runner.os }}-x86_64-watchdog-linux-6.1.75-
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
@@ -286,12 +288,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned kernel
-        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
+        if: ${{ inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/init-qemu-output-mips
           key: qemu-kernel-${{ runner.os }}-mips-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
+          restore-keys: |
+            qemu-kernel-${{ runner.os }}-mips-linux-6.1.75-
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
@@ -354,12 +358,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: restore pinned kernel
-        if: ${{ github.event_name != 'schedule' && inputs.rebuild_kernels != true }}
+        if: ${{ inputs.rebuild_kernels != true }}
         id: kernel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/init-qemu-output-${{ matrix.arch }}
           key: qemu-kernel-${{ runner.os }}-${{ matrix.arch }}-linux-6.1.75-${{ hashFiles('tools/build-qemu-kernel.sh') }}
+          restore-keys: |
+            qemu-kernel-${{ runner.os }}-${{ matrix.arch }}-linux-6.1.75-
       - name: install qemu and the compiler
         run: |
           sudo apt-get update
